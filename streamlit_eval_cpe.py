@@ -73,7 +73,7 @@ if password_input==password_unicef:
     #########
 
     # choose model from a list 
-    model_variable = st.selectbox("Choose a model", ["gpt-4", "gpt-4o", "gpt-3.5-turbo"])
+    model_variable = st.selectbox("Choose a model", ["gpt-4o", "gpt-4", "gpt-3.5-turbo"])
 
     openai.api_key = st.secrets.openai_key
     st.header("Start chatting with your documents 💬 📚")
