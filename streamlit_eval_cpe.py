@@ -33,10 +33,8 @@ st.title("Chat with your documents 📚 🗣️")
 password_unicef =st.secrets.password_unicef
 password_input = st.text_input("Enter a password", type="password")
 
-
     
 if password_input==password_unicef:
-
 
     # Function to upload file to Azure Storage
     def upload_to_azure_storage(file):
@@ -46,9 +44,44 @@ if password_input==password_unicef:
 
     # Streamlit App
 
+    # get the list of files in context to display them
+    st.header("Documents already uploaded")
+    if st.button("Update the list"):
+        blob_service_client = BlobServiceClient.from_connection_string(f"DefaultEndpointsProtocol=https;AccountName={azure_storage_account_name};AccountKey={azure_storage_account_key}")
+        blob_list=blob_service_client.get_container_client('genai').list_blobs()
+        
+        blob_list_display = []   
+        for blob in blob_list:
+            blob_list_display.append(blob.name)
+        for i in blob_list_display:
+            st.write(i)
+    
+    if st.button("Reset and delete all uploaded documents"):
+        blob_service_client = BlobServiceClient.from_connection_string(f"DefaultEndpointsProtocol=https;AccountName={azure_storage_account_name};AccountKey={azure_storage_account_key}")
+        blob_list=blob_service_client.get_container_client('genai').list_blobs()
+        
+        for blob in blob_list:
+            blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob.name)
+            blob_client.delete_blob()
+        st.write('Documents all deleted')
 
-    st.header("Select the documents to upload")
-    uploaded_files = st.file_uploader("Choose a file", accept_multiple_files=True)
+
+
+    # if 'blob_list_display' not in st.session_state:
+    #     st.session_state.blob_list_display = []   
+    # for blob in blob_list:
+    #     st.session_state.blob_list_display.append(blob.name)
+    # for i in st.session_state.blob_list_display:
+    #     st.write(i)
+
+    # 
+
+    
+    
+    #update
+
+    st.header("Select documents to upload")
+    uploaded_files = st.file_uploader("Choose a document", accept_multiple_files=True)
 
     if uploaded_files is not None:
         # st.image(uploaded_file)
@@ -58,7 +91,8 @@ if password_input==password_unicef:
             for uploaded_file in uploaded_files:
                 upload_to_azure_storage(uploaded_file)
                 st.success("File uploaded to Azure Storage!")
-
+            
+ 
 
     #########
 
@@ -125,7 +159,6 @@ if password_input==password_unicef:
             index = VectorStoreIndex.from_documents(knowledge_docs, service_context=service_context)
             return index
 
-
     index = load_data(model_variable)
     st.success("Documents loaded and indexed successfully!")
 
@@ -134,9 +167,6 @@ if password_input==password_unicef:
         load_data.clear()
         index = load_data(model_variable)
         st.success("New documents loaded and indexed successfully!")
-
-
-
 
     chat_engine = index.as_chat_engine(chat_mode="condense_question", verbose=True)
 
