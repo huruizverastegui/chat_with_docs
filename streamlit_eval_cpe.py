@@ -1,5 +1,4 @@
 
-
 import streamlit as st
 import openai
 import llama_index
@@ -12,6 +11,11 @@ except ImportError:
 from azure.storage.blob import BlobServiceClient
 from io import BytesIO
 
+from llama_index.core.extractors import (
+    TitleExtractor,
+    QuestionsAnsweredExtractor,
+)
+from llama_index.core.node_parser import TokenTextSplitter
 
 
 ######### 
@@ -73,7 +77,7 @@ if password_input==password_unicef:
     #########
 
     # choose model from a list 
-    model_variable = st.selectbox("Choose a model", ["gpt-4o", "gpt-4", "gpt-3.5-turbo"])
+    model_variable = st.selectbox("Choose a model", ["gpt-4", "gpt-4o", "gpt-3.5-turbo"])
 
     openai.api_key = st.secrets.openai_key
     st.header("Start chatting with your documents 💬 📚")
@@ -96,10 +100,29 @@ if password_input==password_unicef:
                 connection_string=connection_string_blob,
             )
 
-            docs = loader.load_data()
+            knowledge_docs = loader.load_data()
+            for doc in knowledge_docs: 
+                doc.excluded_embed_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
+                doc.excluded_llm_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
 
-            service_context = ServiceContext.from_defaults(llm=OpenAI(model=llm_model, temperature=0.5, system_prompt="You are an expert on the UNICEF country evaluation process and your job is to summarize context documents to help UNICEF staff in writing reports. Answer in a bullet point manner, be precise and provide examples. It's extremely important that you source each one of the bullet points. Keep your answers based on facts – do not hallucinate features."))
-            index = VectorStoreIndex.from_documents(docs, service_context=service_context)
+            service_context = ServiceContext.from_defaults(llm=OpenAI(model=llm_model, temperature=0.5, 
+                            system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
+                            Keep your answers based on facts – do not hallucinate features.
+                            Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
+                            Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
+                            Example:
+                            The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
+                            """
+
+
+                            ))
+        
+            ## Add the transfornations
+            # text_splitter = TokenTextSplitter(separator=" ", chunk_size=512, chunk_overlap=128)
+            # title_extractor = TitleExtractor(nodes=5)
+            # qa_extractor = QuestionsAnsweredExtractor(questions=3)
+
+            index = VectorStoreIndex.from_documents(knowledge_docs, service_context=service_context)
             return index
 
 
