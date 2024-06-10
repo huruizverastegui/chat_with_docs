@@ -18,7 +18,7 @@ import streamlit as st
 
 azure_storage_account_name = st.secrets.azure_storage_account_name
 azure_storage_account_key = st.secrets.azure_storage_account_key
-container_name = st.secrets.container_name
+container_name = None
 connection_string_blob =st.secrets.connection_string_blob
 
 blob_service_client = BlobServiceClient.from_connection_string(f"DefaultEndpointsProtocol=https;AccountName={azure_storage_account_name};AccountKey={azure_storage_account_key}")
@@ -41,7 +41,7 @@ def list_all_files(container_name):
     return blob_list_display
 
 
-def upload_to_azure_storage(file):
+def upload_to_azure_storage(file, container_name):
     blob_client = blob_service_client.get_blob_client(container=container_name, blob=file.name)
     blob_client.upload_blob(file)
     return True
