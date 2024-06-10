@@ -16,7 +16,7 @@ from llama_index.core.extractors import (
     QuestionsAnsweredExtractor,
 )
 from llama_index.core.node_parser import TokenTextSplitter
-from helpers.azhelpers import upload_to_azure_storage, list_all_containers, list_all_files, delete_all_files
+from helpers.azhelpers import upload_to_azure_storage, list_all_containers, list_all_files, delete_all_files, create_new_container
 
 def write_file_list():
     blob_list = list_all_files(container_name)
@@ -25,6 +25,14 @@ def write_file_list():
         st.write(f"Files in {container_name}:")
         st.dataframe(blob_list, use_container_width=True)
     return
+
+with st.expander("Create a new Knowledge Base", expanded=False):
+    new_container_name = st.text_input("Name your new Knowledge Base")
+    create_container = st.button("Create", type='primary')
+    if create_container:
+        created_container_name = create_new_container(new_container_name)
+        st.success(f"Created new Knowledge Base: {new_container_name}")
+        container_name = created_container_name
 
 
 left,right = st.columns(2)

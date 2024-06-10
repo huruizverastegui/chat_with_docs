@@ -56,6 +56,9 @@ def delete_all_files(container_name):
 
 
 def create_new_container(container_name):
-    genai_container = f"genai-{container_name}"
+    if not container_name.startswith("genai-"):
+        genai_container = f"genai-{container_name}"
+    else:
+        genai_container = container_name
     blob_service_client.create_container(genai_container)
-    return True
+    return genai_container
