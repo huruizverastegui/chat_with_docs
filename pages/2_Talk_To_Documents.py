@@ -18,11 +18,7 @@ from llama_index.core.extractors import (
 from llama_index.core.node_parser import TokenTextSplitter
 from helpers.azhelpers import upload_to_azure_storage, list_all_containers, list_all_files
 
-######### 
-## Upload files to Azure blob 
 
-
-# Azure Storage Account details
 azure_storage_account_name = st.secrets.azure_storage_account_name
 azure_storage_account_key = st.secrets.azure_storage_account_key
 container_name = st.secrets.container_name
@@ -30,8 +26,9 @@ connection_string_blob =st.secrets.connection_string_blob
 
 blob_service_client = BlobServiceClient.from_connection_string(f"DefaultEndpointsProtocol=https;AccountName={azure_storage_account_name};AccountKey={azure_storage_account_key}")
 
-
-container_name = st.sidebar.selectbox("Answering questions from", list_all_containers())
+container_list = list_all_containers()
+container_list = [container for container in container_list if container.startswith("genai")]
+container_name = st.sidebar.selectbox("Answering questions from", container_list)
 model_variable = st.sidebar.selectbox("Powered by", ["gpt-4", "gpt-4o", "gpt-3.5-turbo"])
 st.sidebar.write("Using these documents:")
 blob_list = list_all_files(container_name)
@@ -76,22 +73,11 @@ def load_data(llm_model,container_name):
 
                         ))
     
-        ## Add the transfornations
-        # text_splitter = TokenTextSplitter(separator=" ", chunk_size=512, chunk_overlap=128)
-        # title_extractor = TitleExtractor(nodes=5)
-        # qa_extractor = QuestionsAnsweredExtractor(questions=3)
-
         index = VectorStoreIndex.from_documents(knowledge_docs, service_context=service_context)
         return index
 
 index = load_data(model_variable,container_name)
 st.success("Documents loaded and indexed successfully!")
-
-# add a streamlit button that will run load_data() function
-if st.button("Load and index the new documents provided"):
-    load_data.clear()
-    index = load_data(model_variable,container_name)
-    st.success("New documents loaded and indexed successfully!")
 
 chat_engine = index.as_chat_engine(chat_mode="condense_question", verbose=True)
 

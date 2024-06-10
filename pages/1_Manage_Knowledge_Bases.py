@@ -40,7 +40,6 @@ with right:
         
         
 
-
 uploaded_files = st.file_uploader(f"Add files to {container_name}", type=["pdf", "docx"], accept_multiple_files=True)
 upload_confirm = st.button("Upload now")
 if upload_confirm:
