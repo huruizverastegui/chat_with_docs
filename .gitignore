@@ -1,3 +1,5 @@
 .DS_Store
 .vscode/launch.json
 *.pyc
+.streamlit/secrets.toml
+back_streamlit_eval_cpe copy.oldpy
