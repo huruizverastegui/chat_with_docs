@@ -29,7 +29,8 @@ def list_all_containers():
     container_list = list()
     containers = blob_service_client.list_containers()
     for container in containers:
-        container_list.append(container.name)
+        if "genai-" in container.name:
+            container_list.append(container.name)
     return container_list
 
 
