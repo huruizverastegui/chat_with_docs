@@ -1,4 +1,5 @@
 import openai
+import os 
 import llama_index
 from llama_index.llms.openai import OpenAI
 try:
@@ -16,10 +17,14 @@ from llama_index.core.extractors import (
 from llama_index.core.node_parser import TokenTextSplitter
 import streamlit as st
 
-azure_storage_account_name = st.secrets.azure_storage_account_name
-azure_storage_account_key = st.secrets.azure_storage_account_key
+from dotenv import load_dotenv
+
+load_dotenv()
+
+azure_storage_account_name = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
+azure_storage_account_key = os.environ["AZURE_STORAGE_ACCOUNT_KEY"]
+connection_string_blob = os.environ["CONNECTION_STRING_BLOB"]
 container_name = None
-connection_string_blob =st.secrets.connection_string_blob
 
 blob_service_client = BlobServiceClient.from_connection_string(f"DefaultEndpointsProtocol=https;AccountName={azure_storage_account_name};AccountKey={azure_storage_account_key}")
 
