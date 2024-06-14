@@ -18,15 +18,20 @@ from llama_index.core.extractors import (
 from llama_index.core.node_parser import TokenTextSplitter
 from helpers.azhelpers import upload_to_azure_storage, list_all_containers, list_all_files
 
-password_unicef =st.secrets.password_unicef
+import os 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+password_unicef =os.environ["APP_PASSWORD"]
 password_input = st.text_input("Enter a password", type="password")
 
 if password_input==password_unicef:
-    azure_storage_account_name = st.secrets.azure_storage_account_name
-    azure_storage_account_key = st.secrets.azure_storage_account_key
-    container_name = st.secrets.container_name
-    connection_string_blob =st.secrets.connection_string_blob
+    azure_storage_account_name = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
+    azure_storage_account_key = os.environ["AZURE_STORAGE_ACCOUNT_KEY"]
+    connection_string_blob = os.environ["CONNECTION_STRING_BLOB"]
 
+  
     blob_service_client = BlobServiceClient.from_connection_string(f"DefaultEndpointsProtocol=https;AccountName={azure_storage_account_name};AccountKey={azure_storage_account_key}")
 
     container_list = list_all_containers()
@@ -38,7 +43,7 @@ if password_input==password_unicef:
     st.sidebar.dataframe(blob_list, use_container_width=True)
 
 
-    openai.api_key = st.secrets.openai_key
+    openai.api_key = os.environ["OPEN_AI_KEY"]
     st.header("Start chatting with your documents 💬 📚")
 
     if "messages" not in st.session_state.keys(): # Initialize the chat message history
