@@ -86,9 +86,29 @@ if password_input==password_unicef:
 
     index = load_data(model_variable,container_name)
     st.success("Documents loaded and indexed successfully!")
+  
+    memory = ChatMemoryBuffer.from_defaults(token_limit=5000)
 
-    chat_engine = index.as_chat_engine(chat_mode="condense_question", verbose=True)
-
+    @st.cache_resource() # 
+    def define_chat_engine():
+        chat_engine = index.as_chat_engine(
+            chat_mode="condense_plus_context",
+            memory=memory,
+            system_prompt=(
+                    """ Answer in a bullet point manner, be precise and provide examples.
+                            Keep your answers based on facts – do not hallucinate features.
+                            Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
+                            Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
+                            Example:
+                            The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
+                            """
+                ),
+                llm=OpenAI(model=model_variable, temperature=0.5),
+            )
+        return chat_engine
+    
+    chat_engine=define_chat_engine()
+    
     if prompt := st.chat_input("Your question"): # Prompt for user input and save to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
 
