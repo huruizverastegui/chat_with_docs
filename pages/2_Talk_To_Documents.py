@@ -107,6 +107,8 @@ if password_input == password_unicef:
 
             service_context = ServiceContext.from_defaults(
                 llm=OpenAI(
+                    api_base=st.secrets.openai_api_base,
+                    max_tokens=st.secrets.openai_max_tokens,
                     model=llm_model,
                     temperature=0.5,
                     system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
@@ -143,7 +145,12 @@ if password_input == password_unicef:
                             The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
                             """
             ),
-            llm=OpenAI(model=model_variable, temperature=0.5),
+            llm=OpenAI(
+                api_base=st.secrets.openai_api_base,
+                max_tokens=st.secrets.openai_max_tokens,
+                model=model_variable,
+                temperature=0.5,
+            ),
         )
         return chat_engine
 
