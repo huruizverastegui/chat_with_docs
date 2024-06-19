@@ -1,4 +1,3 @@
-
 import streamlit as st
 import openai
 import llama_index
@@ -38,7 +37,7 @@ if password_input==password_unicef:
     container_list = list_all_containers()
     container_list = [container for container in container_list if container.startswith("genai")]
     container_name = st.sidebar.selectbox("Answering questions from", container_list)
-    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4", "gpt-4o", "gpt-3.5-turbo"])
+    model_variable = st.sidebar.selectbox("Powered by", ["gpt-3.5-turbo","gpt-4", "gpt-4o"])
     st.sidebar.write("Using these documents:")
     blob_list = list_all_files(container_name)
     st.sidebar.dataframe(blob_list, use_container_width=True)
@@ -54,7 +53,7 @@ if password_input==password_unicef:
                                                             
 
 
-    @st.cache_resource(show_spinner=True)
+    @st.cache_data(show_spinner=True)
     def load_data(llm_model,container_name):
         with st.spinner(text="Loading and indexing the provided docs – hang tight! This should take a couple of minutes."):
 
@@ -83,22 +82,32 @@ if password_input==password_unicef:
                             ))
         
             index = VectorStoreIndex.from_documents(knowledge_docs, service_context=service_context)
-            return index
+            return index,knowledge_docs
 
-    index = load_data(model_variable,container_name)
+    index = load_data(model_variable,container_name)[0]
+    knowledge_docs=load_data(model_variable,container_name)[1]
+
     st.success("Documents loaded and indexed successfully!")
-  
-    memory = ChatMemoryBuffer.from_defaults(token_limit=5000)
+    
 
-    @st.cache_resource() # 
-    def define_chat_engine():
+    #define memory
+    @st.cache_resource()  
+    def define_memory():
+        memory = ChatMemoryBuffer.from_defaults(token_limit=5000)
+        return memory
+
+    memory_chat=define_memory()
+
+    @st.cache_resource()  
+    def define_chat_engine(llm_model,container_name):
+        memory = memory_chat
         chat_engine = index.as_chat_engine(
             chat_mode="condense_plus_context",
             memory=memory,
             system_prompt=(
                     """ Answer in a bullet point manner, be precise and provide examples.
-                            Keep your answers based on facts – do not hallucinate features.
-                            Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
+                            Keep your answers based on facts – do not hallucinate features. You are a based on {llm_model}
+                            Answer with all related knowledge docs from {container_name} . Always reference between phrases the ones you use. If you skip one, you will be penalized.
                             Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
                             Example:
                             The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
@@ -108,8 +117,14 @@ if password_input==password_unicef:
             )
         return chat_engine
     
-    chat_engine=define_chat_engine()
+    chat_engine=define_chat_engine(model_variable,container_name)
     
+    if st.button("Refresh the cached documents"):
+        load_data.clear()
+        define_chat_engine.clear()
+
+    st.write(container_name)
+    st.write(knowledge_docs)
     if prompt := st.chat_input("Your question"): # Prompt for user input and save to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
 
