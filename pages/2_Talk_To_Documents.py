@@ -16,12 +16,16 @@ from llama_index.core.extractors import (
 )
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.node_parser import TokenTextSplitter
-from helpers.azhelpers import upload_to_azure_storage, list_all_containers, list_all_files
+from helpers.azhelpers import upload_to_azure_storage, list_all_containers, list_all_files, Logger
+
 
 import os 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = Logger().get_logger()
+logger.info("App started")
 
 password_unicef =os.environ["APP_PASSWORD"]
 password_input = st.text_input("Enter a password", type="password")
@@ -154,6 +158,7 @@ if password_input==password_unicef:
 
     if prompt := st.chat_input("Your question"): # Prompt for user input and save to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
+        logger.info(f"User asked: {prompt} from {container_name} Knowledge base")# record into the log container
 
     for message in st.session_state.messages: # Display the prior chat messages
         with st.chat_message(message["role"]):
@@ -167,3 +172,5 @@ if password_input==password_unicef:
                 st.write(response.response)
                 message = {"role": "assistant", "content": response.response}
                 st.session_state.messages.append(message) # Add response to message history
+                logger.info(f"{model_variable} Model answered: {response} -- from {container_name} Knowledge base")
+                
