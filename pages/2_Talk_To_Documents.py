@@ -151,10 +151,6 @@ if password_input==password_unicef:
     
     chat_engine=define_chat_engine(model_variable,container_name)
     
-    if st.button("Refresh the cached documents"):
-        load_data.clear()
-        define_chat_engine.clear()
-
 
     if prompt := st.chat_input("Your question"): # Prompt for user input and save to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
