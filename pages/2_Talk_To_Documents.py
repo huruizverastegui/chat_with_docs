@@ -37,7 +37,45 @@ if password_input==password_unicef:
     container_list = list_all_containers()
     container_list = [container for container in container_list if container.startswith("genai")]
     container_name = st.sidebar.selectbox("Answering questions from", container_list)
-    model_variable = st.sidebar.selectbox("Powered by", ["gpt-3.5-turbo","gpt-4", "gpt-4o"])
+    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4", "gpt-4o", "gpt-3.5-turbo", "llama3-70B"])
+
+    # Get the API parameters for the Llama models hosted on Azure 
+    if model_variable == "llama3-8B":
+        azure_api_base = os.environ["URL_AZURE_LLAMA3_8B"]
+        azure_api_key = os.environ["KEY_AZURE_LLAMA3_8B"]
+    elif model_variable == "llama3-70B":
+        azure_api_base = os.environ["URL_AZURE_LLAMA3_70B"]
+        azure_api_key = os.environ["KEY_AZURE_LLAMA3_70B"]
+
+
+    #Define the llm to use - 2 scenarios: ChatGPT vs llama models hosted on Azure 
+    if model_variable in ["llama3-8B", "llama3-70B"] :
+        llm_chat=OpenAI( api_base = azure_api_base ,
+                    api_key = azure_api_key , 
+                    max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
+                    temperature=0.5,
+                    system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
+                            Keep your answers based on facts – do not hallucinate features.
+                            Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
+                            Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
+                            Example:
+                            The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
+                            """ )
+        
+    elif model_variable in ["gpt-4", "gpt-4o", "gpt-3.5-turbo"]:
+        llm_chat=OpenAI(  # max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
+                    model = model_variable,
+                    temperature=0.5,
+                    system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
+                            Keep your answers based on facts – do not hallucinate features.
+                            Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
+                            Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
+                            Example:
+                            The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
+                            """ )
+
+
+
     st.sidebar.write("Using these documents:")
     blob_list = list_all_files(container_name)
     st.sidebar.dataframe(blob_list, use_container_width=True)
@@ -69,17 +107,7 @@ if password_input==password_unicef:
                 doc.excluded_embed_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
                 doc.excluded_llm_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
 
-            service_context = ServiceContext.from_defaults(llm=OpenAI(model=llm_model, temperature=0.5, 
-                            system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
-                            Keep your answers based on facts – do not hallucinate features.
-                            Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
-                            Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
-                            Example:
-                            The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
-                            """
-
-
-                            ))
+            service_context = ServiceContext.from_defaults(llm=llm_chat)
         
             index = VectorStoreIndex.from_documents(knowledge_docs, service_context=service_context)
             return index,knowledge_docs
@@ -106,14 +134,14 @@ if password_input==password_unicef:
             memory=memory,
             system_prompt=(
                     """ Answer in a bullet point manner, be precise and provide examples.
-                            Keep your answers based on facts – do not hallucinate features. You are a based on {llm_model}
+                            Keep your answers based on facts – do not hallucinate features. You are a based on {llm_model} 
                             Answer with all related knowledge docs from {container_name} . Always reference between phrases the ones you use. If you skip one, you will be penalized.
                             Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
                             Example:
                             The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
                             """
                 ),
-                llm=OpenAI(model=model_variable, temperature=0.5),
+                llm=llm_chat,
             )
         return chat_engine
     
@@ -123,8 +151,7 @@ if password_input==password_unicef:
         load_data.clear()
         define_chat_engine.clear()
 
-    st.write(container_name)
-    st.write(knowledge_docs)
+
     if prompt := st.chat_input("Your question"): # Prompt for user input and save to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
 
