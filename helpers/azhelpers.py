@@ -110,7 +110,7 @@ def list_all_files(container_name):
     return blob_list_display
 
 
-def upload_to_azure_storage(file):
+def upload_to_azure_storage(file,container_name):
     blob_client = blob_service_client.get_blob_client(
         container=container_name, blob=file.name
     )
