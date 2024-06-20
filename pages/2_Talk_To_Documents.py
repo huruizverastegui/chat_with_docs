@@ -41,7 +41,7 @@ if password_input==password_unicef:
     container_list = list_all_containers()
     container_list = [container for container in container_list if container.startswith("genai")]
     container_name = st.sidebar.selectbox("Answering questions from", container_list)
-    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o", "gpt-4", "gpt-3.5-turbo", "llama3-70B"])
+    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o", "gpt-4", "gpt-3.5-turbo"])
 
     # Get the API parameters for the Llama models hosted on Azure 
     if model_variable == "llama3-8B":
