@@ -41,7 +41,7 @@ if password_input==password_unicef:
     container_list = list_all_containers()
     container_list = [container for container in container_list if container.startswith("genai")]
     container_name = st.sidebar.selectbox("Answering questions from", container_list)
-    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o", "gpt-4", "gpt-3.5-turbo"])
+    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o", "gpt-4", "gpt-3.5-turbo", "llama3-70B"])
 
     # Get the API parameters for the Llama models hosted on Azure 
     if model_variable == "llama3-8B":
@@ -52,31 +52,6 @@ if password_input==password_unicef:
         azure_api_key = os.environ["KEY_AZURE_LLAMA3_70B"]
 
 
-    #Define the llm to use - 2 scenarios: ChatGPT vs llama models hosted on Azure 
-    # if model_variable in ["llama3-8B", "llama3-70B"] :
-    #     llm_chat=OpenAI( api_base = azure_api_base ,
-    #                 api_key = azure_api_key , 
-    #                 max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
-    #                 temperature=0.5,
-    #                 system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
-    #                         Keep your answers based on facts – do not hallucinate features.
-    #                         Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
-    #                         Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
-    #                         Example:
-    #                         The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
-    #                         """ )
-        
-    # elif model_variable in ["gpt-4", "gpt-4o", "gpt-3.5-turbo"]:
-    #     llm_chat=OpenAI(  # max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
-    #                 model = model_variable,
-    #                 temperature=0.5,
-    #                 system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
-    #                         Keep your answers based on facts – do not hallucinate features.
-    #                         Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
-    #                         Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
-    #                         Example:
-    #                         The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
-    #                         """ )
 
 
 
@@ -111,15 +86,35 @@ if password_input==password_unicef:
                 doc.excluded_embed_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
                 doc.excluded_llm_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
 
-            service_context = ServiceContext.from_defaults(llm=OpenAI( model = llm_model,
-                    temperature=0.5,
-                    system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
-                            Keep your answers based on facts – do not hallucinate features.
-                            Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
-                            Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
-                            Example:
-                            The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
-                            """ ))
+            # define the model to use depending on the llm_model provided 
+            # 2 scenarios: ChatGPT vs llama models hosted on Azure 
+            if llm_model in ["llama3-8B", "llama3-70B"] :
+                llm_chat=OpenAI( api_base = azure_api_base ,
+                            api_key = azure_api_key , 
+                            max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
+                            temperature=0.5,
+                            system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
+                                    Keep your answers based on facts – do not hallucinate features.
+                                    Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
+                                    Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
+                                    Example:
+                                    The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
+                                    """ )
+                
+            elif llm_model in ["gpt-4", "gpt-4o", "gpt-3.5-turbo"]:
+                llm_chat=OpenAI( 
+                            model = model_variable,
+                            temperature=0.5,
+                            system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
+                                    Keep your answers based on facts – do not hallucinate features.
+                                    Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
+                                    Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
+                                    Example:
+                                    The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
+                                    """ )
+
+
+            service_context = ServiceContext.from_defaults(llm=llm_chat)
         
             index = VectorStoreIndex.from_documents(knowledge_docs, service_context=service_context)
             return index,knowledge_docs
@@ -141,6 +136,20 @@ if password_input==password_unicef:
     @st.cache_resource()  
     def define_chat_engine(llm_model,container_name):
         memory = memory_chat
+
+
+        if llm_model in ["llama3-8B", "llama3-70B"] :
+                llm_chat=OpenAI( api_base = azure_api_base ,
+                            api_key = azure_api_key , 
+                            max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
+                            temperature=0.5)
+                
+        elif llm_model in ["gpt-4", "gpt-4o", "gpt-3.5-turbo"]:
+                llm_chat=OpenAI( 
+                            model = model_variable,
+                            temperature=0.5)
+
+
         chat_engine = index.as_chat_engine(
             chat_mode="condense_plus_context",
             memory=memory,
@@ -153,7 +162,7 @@ if password_input==password_unicef:
                             The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
                             """
                 ),
-                llm=OpenAI( model = llm_model, temperature=0.5 )
+                llm=llm_chat
 ,
             )
         return chat_engine
