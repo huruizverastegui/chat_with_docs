@@ -41,7 +41,7 @@ if password_input==password_unicef:
     container_list = list_all_containers()
     container_list = [container for container in container_list if container.startswith("genai")]
     container_name = st.sidebar.selectbox("Answering questions from", container_list)
-    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o", "gpt-4", "gpt-3.5-turbo", "llama3-70B"])
+    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o-mini","gpt-4o", "gpt-4", "gpt-3.5-turbo", "llama3-70B"])
 
     # Get the API parameters for the Llama models hosted on Azure 
     if model_variable == "llama3-8B":
@@ -101,7 +101,7 @@ if password_input==password_unicef:
                                     The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
                                     """ )
                 
-            elif llm_model in ["gpt-4", "gpt-4o", "gpt-3.5-turbo"]:
+            elif llm_model in ["gpt-4o-mini","gpt-4", "gpt-4o", "gpt-3.5-turbo"]:
                 llm_chat=OpenAI( 
                             model = model_variable,
                             temperature=0.5,
@@ -144,7 +144,7 @@ if password_input==password_unicef:
                             max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
                             temperature=0.5)
                 
-        elif llm_model in ["gpt-4", "gpt-4o", "gpt-3.5-turbo"]:
+        elif llm_model in ["gpt-4o-mini","gpt-4", "gpt-4o", "gpt-3.5-turbo"]:
                 llm_chat=OpenAI( 
                             model = model_variable,
                             temperature=0.5)
