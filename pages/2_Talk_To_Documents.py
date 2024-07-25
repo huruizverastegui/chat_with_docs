@@ -41,7 +41,7 @@ if password_input==password_unicef:
     container_list = list_all_containers()
     container_list = [container for container in container_list if container.startswith("genai")]
     container_name = st.sidebar.selectbox("Answering questions from", container_list)
-    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o-mini","gpt-4o", "gpt-4", "gpt-3.5-turbo", "llama3-70B"])
+    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o-mini","gpt-4o", "gpt-4", "gpt-3.5-turbo","llama3.1-70B" ,"llama3-70B"])
 
     # Get the API parameters for the Llama models hosted on Azure 
     if model_variable == "llama3-8B":
@@ -50,6 +50,10 @@ if password_input==password_unicef:
     elif model_variable == "llama3-70B":
         azure_api_base = os.environ["URL_AZURE_LLAMA3_70B"]
         azure_api_key = os.environ["KEY_AZURE_LLAMA3_70B"]
+
+    elif model_variable == "llama3.1-70B":
+        azure_api_base = os.environ["URL_AZURE_LLAMA3_1_70B"]
+        azure_api_key = os.environ["KEY_AZURE_LLAMA3_1_70B"]
 
 
 
@@ -88,7 +92,7 @@ if password_input==password_unicef:
 
             # define the model to use depending on the llm_model provided 
             # 2 scenarios: ChatGPT vs llama models hosted on Azure 
-            if llm_model in ["llama3-8B", "llama3-70B"] :
+            if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B"] :
                 llm_chat=OpenAI( api_base = azure_api_base ,
                             api_key = azure_api_key , 
                             max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
@@ -138,7 +142,7 @@ if password_input==password_unicef:
         memory = memory_chat
 
 
-        if llm_model in ["llama3-8B", "llama3-70B"] :
+        if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B"] :
                 llm_chat=OpenAI( api_base = azure_api_base ,
                             api_key = azure_api_key , 
                             max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
@@ -188,3 +192,4 @@ if password_input==password_unicef:
                 message = {"role": "assistant", "content": response.response}
                 st.session_state.messages.append(message) # Add response to message history
                 logger.info(f"{model_variable} Model answered: {response} -- from {container_name} Knowledge base")
+                
