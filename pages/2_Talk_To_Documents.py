@@ -41,12 +41,13 @@ if password_input==password_unicef:
     container_list = list_all_containers()
     container_list = [container for container in container_list if container.startswith("genai")]
     container_name = st.sidebar.selectbox("Answering questions from", container_list)
-    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o-mini","gpt-4o", "gpt-4", "gpt-3.5-turbo","llama3.1-70B" ,"llama3-70B"])
+    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o-mini","gpt-4o", "gpt-4", "gpt-3.5-turbo","llama3.1-70B" ,"llama3-70B","llama-4-Scout"])
 
     # Get the API parameters for the Llama models hosted on Azure 
     if model_variable == "llama3-8B":
         azure_api_base = os.environ["URL_AZURE_LLAMA3_8B"]
         azure_api_key = os.environ["KEY_AZURE_LLAMA3_8B"]
+      
     elif model_variable == "llama3-70B":
         azure_api_base = os.environ["URL_AZURE_LLAMA3_70B"]
         azure_api_key = os.environ["KEY_AZURE_LLAMA3_70B"]
@@ -55,8 +56,9 @@ if password_input==password_unicef:
         azure_api_base = os.environ["URL_AZURE_LLAMA3_1_70B"]
         azure_api_key = os.environ["KEY_AZURE_LLAMA3_1_70B"]
 
-
-
+    elif model_variable == "llama-4-Scout":
+        azure_api_base = os.environ["URL_AZURE_LLAMA4_SCOUT"]
+        azure_api_key = os.environ["KEY_AZURE_LLAMA4_SCOUT"]
 
 
     st.sidebar.write("Using these documents:")
@@ -92,7 +94,7 @@ if password_input==password_unicef:
 
             # define the model to use depending on the llm_model provided 
             # 2 scenarios: ChatGPT vs llama models hosted on Azure 
-            if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B"] :
+            if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B","llama-4-Scout"] :
                 llm_chat=OpenAI( api_base = azure_api_base ,
                             api_key = azure_api_key , 
                             max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
@@ -142,7 +144,7 @@ if password_input==password_unicef:
         memory = memory_chat
 
 
-        if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B"] :
+        if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B","llama-4-Scout"] :
                 llm_chat=OpenAI( api_base = azure_api_base ,
                             api_key = azure_api_key , 
                             max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
