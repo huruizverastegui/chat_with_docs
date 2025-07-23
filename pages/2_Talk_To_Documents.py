@@ -14,6 +14,13 @@ from llama_index.core.extractors import (
     TitleExtractor,
     QuestionsAnsweredExtractor,
 )
+
+from llama_index.embeddings.openai import OpenAIEmbedding
+from llama_index.core.node_parser import SimpleNodeParser
+
+from llama_index.core.node_parser import SentenceSplitter
+
+from llama_index.core import Settings
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.node_parser import TokenTextSplitter
 from helpers.azhelpers import upload_to_azure_storage, list_all_containers, list_all_files, Logger
@@ -21,6 +28,11 @@ from helpers.azhelpers import upload_to_azure_storage, list_all_containers, list
 
 import os 
 from dotenv import load_dotenv
+
+from llama_index.readers.azstorage_blob import AzStorageBlobReader
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import time
 
 load_dotenv()
 
@@ -80,17 +92,44 @@ if password_input==password_unicef:
     def load_data(llm_model,container_name):
         with st.spinner(text="Loading and indexing the provided docs – hang tight! This should take a couple of minutes."):
 
-            from llama_index.readers.azstorage_blob import AzStorageBlobReader
-
             loader = AzStorageBlobReader(
                 container_name=container_name,
                 connection_string=connection_string_blob,
             )
 
             knowledge_docs = loader.load_data()
-            for doc in knowledge_docs: 
-                doc.excluded_embed_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
-                doc.excluded_llm_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
+
+            # Clean document metadata to remove non-serializable Azure objects
+            def clean_doc_metadata(doc):
+                    # Remove problematic Azure-specific metadata
+                    cleaned_metadata = {}
+                    for key, value in doc.metadata.items():
+                        # Only keep serializable metadata
+                        if isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                            cleaned_metadata[key] = value
+                        elif hasattr(value, '__dict__'):
+                            # Convert objects to string representation
+                            cleaned_metadata[key] = str(value)
+                    
+                    doc.metadata = cleaned_metadata
+                    
+                    # Set exclusion keys for embedding and LLM
+                    doc.excluded_embed_metadata_keys = [
+                        'file_type', 'file_size', 'creation_date', 'last_modified_date', 
+                        'last_accessed_date', 'copy_properties', 'blob_type', 'content_settings'
+                    ]
+                    doc.excluded_llm_metadata_keys = [
+                        'file_type', 'file_size', 'creation_date', 'last_modified_date', 
+                        'last_accessed_date', 'copy_properties', 'blob_type', 'content_settings'
+                    ]
+                    return doc
+
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                    knowledge_docs = list(executor.map(clean_doc_metadata, knowledge_docs))
+
+            # for doc in knowledge_docs: 
+            #     doc.excluded_embed_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
+            #     doc.excluded_llm_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
 
             # define the model to use depending on the llm_model provided 
             # 2 scenarios: ChatGPT vs llama models hosted on Azure 
@@ -119,10 +158,26 @@ if password_input==password_unicef:
                                     The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
                                     """ )
 
-
-            service_context = ServiceContext.from_defaults(llm=llm_chat)
+            Settings.llm = llm_chat
+            Settings.embed_model = OpenAIEmbedding(
+                # model="text-embedding-ada-002",
+                model = "text-embedding-3-large",
+                embed_batch_size=20  # Reduce batch size to avoid rate limits
+                )
+            # parser = SimpleNodeParser.from_defaults(
+            # chunk_size=1024,  # Smaller chunks to reduce token count
+            # chunk_overlap=50
+            #     )
+            
+            # Settings.node_parser = parser
+            Settings.node_parser = SentenceSplitter(
+            chunk_size=1024,  # Larger chunks = fewer API calls
+            chunk_overlap=100,
+            paragraph_separator="\n\n",
+            secondary_chunking_regex="[.!?]+",
+        )
         
-            index = VectorStoreIndex.from_documents(knowledge_docs, service_context=service_context)
+            index = VectorStoreIndex.from_documents(knowledge_docs)
             return index,knowledge_docs
 
     index = load_data(model_variable,container_name)[0]
@@ -194,4 +249,3 @@ if password_input==password_unicef:
                 message = {"role": "assistant", "content": response.response}
                 st.session_state.messages.append(message) # Add response to message history
                 logger.info(f"{model_variable} Model answered: {response} -- from {container_name} Knowledge base")
-                
