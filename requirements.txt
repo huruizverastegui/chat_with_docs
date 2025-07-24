@@ -21,3 +21,4 @@ llamaindex-py-client
 openai
 python-dotenv
 streamlit==1.35.0
+llama-index-embeddings-azure-openai
