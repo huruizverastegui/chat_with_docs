@@ -21,11 +21,3 @@ llamaindex-py-client
 openai
 python-dotenv
 streamlit==1.35.0
-pdfminer.six==20220524
-unstructured==0.6.7
-llama-index-embeddings-azure-openai
-llama-index-llms-azure-openai 
-sentence-transformers
-llama-index-retrievers-bm25
-llama-index-vector-stores-faiss
-faiss-cpu
