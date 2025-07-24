@@ -2,6 +2,8 @@ import streamlit as st
 import openai
 import llama_index
 from llama_index.llms.openai import OpenAI
+from llama_index.llms.azure_openai import AzureOpenAI 
+
 try:
   from llama_index import VectorStoreIndex, ServiceContext, Document, SimpleDirectoryReader
 except ImportError:
@@ -19,6 +21,8 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 from llama_index.core.node_parser import SimpleNodeParser
 
 from llama_index.core.node_parser import SentenceSplitter
+
+from llama_index.embeddings.azure_openai import AzureOpenAIEmbedding
 
 from llama_index.core import Settings
 from llama_index.core.memory import ChatMemoryBuffer
@@ -47,13 +51,26 @@ if password_input==password_unicef:
     azure_storage_account_key = os.environ["AZURE_STORAGE_ACCOUNT_KEY"]
     connection_string_blob = os.environ["CONNECTION_STRING_BLOB"]
 
+    # Azure OpenAI Configuration
+    azure_openai_endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
+    azure_openai_api_key = os.environ["AZURE_OPENAI_API_KEY"]
+    azure_openai_api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01")
+    
+    # Deployment names for your Azure OpenAI models
+    gpt4o_deployment = os.environ.get("AZURE_GPT4O_DEPLOYMENT", "gpt-4o")
+    gpt4o_mini_deployment = os.environ.get("AZURE_GPT4O_MINI_DEPLOYMENT", "gpt-4o-mini")
+    gpt4_deployment = os.environ.get("AZURE_GPT4_DEPLOYMENT", "gpt-4")
+    gpt35_deployment = os.environ.get("AZURE_GPT35_DEPLOYMENT", "gpt-35-turbo")
+    o4_mini_deployment =  os.environ.get("AZURE_O4MINI_DEPLOYMENT", "o4-mini")
+    embedding_deployment = os.environ.get("AZURE_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
+
   
     blob_service_client = BlobServiceClient.from_connection_string(f"DefaultEndpointsProtocol=https;AccountName={azure_storage_account_name};AccountKey={azure_storage_account_key}")
 
     container_list = list_all_containers()
     container_list = [container for container in container_list if container.startswith("genai")]
     container_name = st.sidebar.selectbox("Answering questions from", container_list)
-    model_variable = st.sidebar.selectbox("Powered by", ["gpt-4o-mini","gpt-4o", "gpt-4", "gpt-3.5-turbo","llama3.1-70B" ,"llama3-70B","llama-4-Scout"])
+    model_variable = st.sidebar.selectbox("Powered by", ["o4-mini","gpt-4","gpt-4o","llama-4-Scout"])
 
     # Get the API parameters for the Llama models hosted on Azure 
     if model_variable == "llama3-8B":
@@ -77,8 +94,7 @@ if password_input==password_unicef:
     blob_list = list_all_files(container_name)
     st.sidebar.dataframe(blob_list, use_container_width=True)
 
-
-    openai.api_key = os.environ["OPEN_AI_KEY"]
+    # openai.api_key = os.environ["OPEN_AI_KEY"]
     st.header("Start chatting with your documents 💬 📚")
 
     if "messages" not in st.session_state.keys(): # Initialize the chat message history
@@ -87,6 +103,20 @@ if password_input==password_unicef:
         ]
                                                             
 
+    def get_azure_openai_deployment_name(model_name):
+    # """Map model names to Azure OpenAI deployment names"""
+        deployment_mapping = {
+            "gpt-4o": gpt4o_deployment,
+            "gpt-4o-mini": gpt4o_mini_deployment,
+            "gpt-4": gpt4_deployment,
+            "gpt-3.5-turbo": gpt35_deployment,
+            "o4-mini": o4_mini_deployment ,
+        }
+        return deployment_mapping.get(model_name, model_name)
+    
+    # Helper function to check if model is o1 series
+    def is_o_model(model_name):
+        return model_name in ["o4-mini"]
 
     @st.cache_data(show_spinner=True)
     def load_data(llm_model,container_name):
@@ -127,17 +157,15 @@ if password_input==password_unicef:
             with ThreadPoolExecutor(max_workers=4) as executor:
                     knowledge_docs = list(executor.map(clean_doc_metadata, knowledge_docs))
 
-            # for doc in knowledge_docs: 
-            #     doc.excluded_embed_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
-            #     doc.excluded_llm_metadata_keys=['file_type','file_size','creation_date', 'last_modified_date','last_accessed_date']
 
             # define the model to use depending on the llm_model provided 
-            # 2 scenarios: ChatGPT vs llama models hosted on Azure 
+                        
+            # 3 scenarios: Azure OpenAI GPT models, Llama models hosted on Azure, or fallback
             if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B","llama-4-Scout"] :
                 llm_chat=OpenAI( api_base = azure_api_base ,
                             api_key = azure_api_key , 
-                            max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
-                            temperature=0.5,
+                            max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "5000")) ,
+                            temperature=0.1,
                             system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
                                     Keep your answers based on facts – do not hallucinate features.
                                     Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
@@ -146,30 +174,44 @@ if password_input==password_unicef:
                                     The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
                                     """ )
                 
-            elif llm_model in ["gpt-4o-mini","gpt-4", "gpt-4o", "gpt-3.5-turbo"]:
-                llm_chat=OpenAI( 
-                            model = model_variable,
-                            temperature=0.5,
-                            system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
-                                    Keep your answers based on facts – do not hallucinate features.
-                                    Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
-                                    Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
-                                    Example:
-                                    The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
-                                    """ )
+            elif llm_model in ["gpt-4o-mini","gpt-4", "gpt-4o", "gpt-3.5-turbo","o4-mini"]:
+                deployment_name = get_azure_openai_deployment_name(llm_model)
+
+                if is_o_model(llm_model):
+                    llm_chat = AzureOpenAI( 
+                    engine=deployment_name,
+                    azure_endpoint=azure_openai_endpoint,
+                    api_key=azure_openai_api_key,
+                    api_version=azure_openai_api_version,
+                    # No temperature parameter for o models
+                    # No system_prompt parameter for o models
+                    )
+                    
+                else:
+                    llm_chat = AzureOpenAI( 
+                                engine=deployment_name,
+                                azure_endpoint=azure_openai_endpoint,
+                                api_key=azure_openai_api_key,
+                                api_version=azure_openai_api_version,
+                                temperature=0.1,
+                                system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
+                                        Keep your answers based on facts – do not hallucinate features.
+                                        Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
+                                        Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
+                                        Example:
+                                        The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
+                                        """ )
 
             Settings.llm = llm_chat
-            Settings.embed_model = OpenAIEmbedding(
-                # model="text-embedding-ada-002",
-                model = "text-embedding-3-large",
-                embed_batch_size=20  # Reduce batch size to avoid rate limits
-                )
-            # parser = SimpleNodeParser.from_defaults(
-            # chunk_size=1024,  # Smaller chunks to reduce token count
-            # chunk_overlap=50
-            #     )
             
-            # Settings.node_parser = parser
+            Settings.embed_model = AzureOpenAIEmbedding(
+                model=embedding_deployment,
+                azure_endpoint=azure_openai_endpoint,
+                api_key=azure_openai_api_key,
+                api_version=azure_openai_api_version,
+                embed_batch_size=20
+            )
+
             Settings.node_parser = SentenceSplitter(
             chunk_size=1024,  # Larger chunks = fewer API calls
             chunk_overlap=100,
@@ -202,14 +244,27 @@ if password_input==password_unicef:
         if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B","llama-4-Scout"] :
                 llm_chat=OpenAI( api_base = azure_api_base ,
                             api_key = azure_api_key , 
-                            max_tokens=os.environ["OPENAI_MAX_TOKENS"] ,
-                            temperature=0.5)
+                            max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "4000")) ,
+                            temperature=0.1)
                 
-        elif llm_model in ["gpt-4o-mini","gpt-4", "gpt-4o", "gpt-3.5-turbo"]:
-                llm_chat=OpenAI( 
-                            model = model_variable,
-                            temperature=0.5)
-
+        elif llm_model in ["gpt-4o-mini","gpt-4", "gpt-4o", "gpt-3.5-turbo","o4-mini"]:
+                deployment_name = get_azure_openai_deployment_name(llm_model)
+                llm_chat = AzureOpenAI( 
+                            engine=deployment_name,
+                            azure_endpoint=azure_openai_endpoint,
+                            api_key=azure_openai_api_key,
+                            api_version=azure_openai_api_version,
+                            temperature=0.1)
+        
+        # elif llm_model in ["o4-mini"]:
+                if is_o_model(llm_model): 
+                    deployment_name = get_azure_openai_deployment_name(llm_model)
+                    llm_chat = AzureOpenAI( 
+                                engine=deployment_name,
+                                azure_endpoint=azure_openai_endpoint,
+                                api_key=azure_openai_api_key,
+                                api_version=azure_openai_api_version,
+                                temperature=1)
 
         chat_engine = index.as_chat_engine(
             chat_mode="condense_plus_context",
@@ -224,14 +279,11 @@ if password_input==password_unicef:
                             """
                 ),
                 llm=llm_chat
-,
             )
         return chat_engine
     
     chat_engine=define_chat_engine(model_variable,container_name)
     
-
-
     if prompt := st.chat_input("Your question"): # Prompt for user input and save to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
         logger.info(f"User asked: {prompt} from {container_name} Knowledge base")# record into the log container
