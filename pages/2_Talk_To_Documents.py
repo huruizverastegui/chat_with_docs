@@ -72,6 +72,25 @@ if password_input==password_unicef:
     container_name = st.sidebar.selectbox("Answering questions from", container_list)
     model_variable = st.sidebar.selectbox("Powered by", ["o4-mini","gpt-4","gpt-4o","llama-4-Scout"])
 
+    # IMPORTANT: Initialize session state for user isolation
+    if "current_container" not in st.session_state:
+        st.session_state.current_container = None
+    if "current_model" not in st.session_state:
+        st.session_state.current_model = None
+    if "index" not in st.session_state:
+        st.session_state.index = None
+    if "chat_engine" not in st.session_state:
+        st.session_state.chat_engine = None
+    if "memory" not in st.session_state:
+        st.session_state.memory = None
+
+    # Check if we need to reload data (container or model changed)
+    need_reload = (
+        st.session_state.current_container != container_name or 
+        st.session_state.current_model != model_variable or
+        st.session_state.index is None
+    )
+
     # Get the API parameters for the Llama models hosted on Azure 
     if model_variable == "llama3-8B":
         azure_api_base = os.environ["URL_AZURE_LLAMA3_8B"]
@@ -89,22 +108,24 @@ if password_input==password_unicef:
         azure_api_base = os.environ["URL_AZURE_LLAMA4_SCOUT"]
         azure_api_key = os.environ["KEY_AZURE_LLAMA4_SCOUT"]
 
-
     st.sidebar.write("Using these documents:")
     blob_list = list_all_files(container_name)
     st.sidebar.dataframe(blob_list, use_container_width=True)
 
-    # openai.api_key = os.environ["OPEN_AI_KEY"]
     st.header("Start chatting with your documents 💬 📚")
 
-    if "messages" not in st.session_state.keys(): # Initialize the chat message history
+    # Reset messages when switching knowledge base or model
+    if need_reload:
         st.session_state.messages = [
             {"role": "assistant", "content": "Ask me a question about the documents you uploaded!"}
         ]
-                                                            
+    elif "messages" not in st.session_state.keys():
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Ask me a question about the documents you uploaded!"}
+        ]
 
     def get_azure_openai_deployment_name(model_name):
-    # """Map model names to Azure OpenAI deployment names"""
+        # """Map model names to Azure OpenAI deployment names"""
         deployment_mapping = {
             "gpt-4o": gpt4o_deployment,
             "gpt-4o-mini": gpt4o_mini_deployment,
@@ -118,8 +139,8 @@ if password_input==password_unicef:
     def is_o_model(model_name):
         return model_name in ["o4-mini"]
 
-    @st.cache_data(show_spinner=True)
-    def load_data(llm_model,container_name):
+    def load_data(llm_model, container_name):
+        """Load data without caching to ensure fresh data per session"""
         with st.spinner(text="Loading and indexing the provided docs – hang tight! This should take a couple of minutes."):
 
             loader = AzStorageBlobReader(
@@ -131,32 +152,31 @@ if password_input==password_unicef:
 
             # Clean document metadata to remove non-serializable Azure objects
             def clean_doc_metadata(doc):
-                    # Remove problematic Azure-specific metadata
-                    cleaned_metadata = {}
-                    for key, value in doc.metadata.items():
-                        # Only keep serializable metadata
-                        if isinstance(value, (str, int, float, bool, list, dict, type(None))):
-                            cleaned_metadata[key] = value
-                        elif hasattr(value, '__dict__'):
-                            # Convert objects to string representation
-                            cleaned_metadata[key] = str(value)
-                    
-                    doc.metadata = cleaned_metadata
-                    
-                    # Set exclusion keys for embedding and LLM
-                    doc.excluded_embed_metadata_keys = [
-                        'file_type', 'file_size', 'creation_date', 'last_modified_date', 
-                        'last_accessed_date', 'copy_properties', 'blob_type', 'content_settings'
-                    ]
-                    doc.excluded_llm_metadata_keys = [
-                        'file_type', 'file_size', 'creation_date', 'last_modified_date', 
-                        'last_accessed_date', 'copy_properties', 'blob_type', 'content_settings'
-                    ]
-                    return doc
+                # Remove problematic Azure-specific metadata
+                cleaned_metadata = {}
+                for key, value in doc.metadata.items():
+                    # Only keep serializable metadata
+                    if isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                        cleaned_metadata[key] = value
+                    elif hasattr(value, '__dict__'):
+                        # Convert objects to string representation
+                        cleaned_metadata[key] = str(value)
+                
+                doc.metadata = cleaned_metadata
+                
+                # Set exclusion keys for embedding and LLM
+                doc.excluded_embed_metadata_keys = [
+                    'file_type', 'file_size', 'creation_date', 'last_modified_date', 
+                    'last_accessed_date', 'copy_properties', 'blob_type', 'content_settings'
+                ]
+                doc.excluded_llm_metadata_keys = [
+                    'file_type', 'file_size', 'creation_date', 'last_modified_date', 
+                    'last_accessed_date', 'copy_properties', 'blob_type', 'content_settings'
+                ]
+                return doc
 
             with ThreadPoolExecutor(max_workers=4) as executor:
-                    knowledge_docs = list(executor.map(clean_doc_metadata, knowledge_docs))
-
+                knowledge_docs = list(executor.map(clean_doc_metadata, knowledge_docs))
 
             # define the model to use depending on the llm_model provided 
                         
@@ -213,40 +233,27 @@ if password_input==password_unicef:
             )
 
             Settings.node_parser = SentenceSplitter(
-            chunk_size=1024,  # Larger chunks = fewer API calls
-            chunk_overlap=100,
-            paragraph_separator="\n\n",
-            secondary_chunking_regex="[.!?]+",
-        )
+                chunk_size=1024,  # Larger chunks = fewer API calls
+                chunk_overlap=100,
+                paragraph_separator="\n\n",
+                secondary_chunking_regex="[.!?]+",
+            )
         
             index = VectorStoreIndex.from_documents(knowledge_docs)
-            return index,knowledge_docs
+            return index, knowledge_docs
 
-    index = load_data(model_variable,container_name)[0]
-    knowledge_docs=load_data(model_variable,container_name)[1]
-
-    st.success("Documents loaded and indexed successfully!")
-    
-
-    #define memory
-    @st.cache_resource()  
-    def define_memory():
+    def create_chat_engine(llm_model, index, container_name):
+        """Create a new chat engine for the current session"""
+        
+        # Create fresh memory for this session
         memory = ChatMemoryBuffer.from_defaults(token_limit=5000)
-        return memory
-
-    memory_chat=define_memory()
-
-    @st.cache_resource()  
-    def define_chat_engine(llm_model,container_name):
-        memory = memory_chat
-
 
         if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B","llama-4-Scout"] :
-                llm_chat=OpenAI( api_base = azure_api_base ,
-                            api_key = azure_api_key , 
-                            max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "4000")) ,
-                            temperature=0.1)
-                
+            llm_chat=OpenAI( api_base = azure_api_base ,
+                        api_key = azure_api_key , 
+                        max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "4000")) ,
+                        temperature=0.1)
+            
         elif llm_model in ["gpt-4o-mini","gpt-4", "gpt-4o", "gpt-3.5-turbo","o4-mini"]:
                 deployment_name = get_azure_openai_deployment_name(llm_model)
                 llm_chat = AzureOpenAI( 
@@ -270,19 +277,27 @@ if password_input==password_unicef:
             chat_mode="condense_plus_context",
             memory=memory,
             system_prompt=(
-                    """ Answer in a bullet point manner, be precise and provide examples.
-                            Keep your answers based on facts – do not hallucinate features. You are a based on {llm_model} 
-                            Answer with all related knowledge docs from {container_name} . Always reference between phrases the ones you use. If you skip one, you will be penalized.
-                            Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
-                            Example:
-                            The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
-                            """
-                ),
-                llm=llm_chat
-            )
-        return chat_engine
-    
-    chat_engine=define_chat_engine(model_variable,container_name)
+                f""" Answer in a bullet point manner, be precise and provide examples.
+                        Keep your answers based on facts – do not hallucinate features. You are based on {llm_model} 
+                        Answer with all related knowledge docs from {container_name} . Always reference between phrases the ones you use. If you skip one, you will be penalized.
+                        Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
+                        Example:
+                        The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
+                        """ if not is_o_model(llm_model) else None  # o-series models don't support system_prompt in chat_engine
+            ),
+            llm=llm_chat
+        )
+        return chat_engine, memory
+
+    # Load data only when needed (container or model changed)
+    if need_reload:
+        st.session_state.index, knowledge_docs = load_data(model_variable, container_name)
+        st.session_state.chat_engine, st.session_state.memory = create_chat_engine(
+            model_variable, st.session_state.index, container_name
+        )
+        st.session_state.current_container = container_name
+        st.session_state.current_model = model_variable
+        st.success("Documents loaded and indexed successfully!")
     
     if prompt := st.chat_input("Your question"): # Prompt for user input and save to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
@@ -296,7 +311,7 @@ if password_input==password_unicef:
     if st.session_state.messages[-1]["role"] != "assistant":
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                response = chat_engine.chat(prompt)
+                response = st.session_state.chat_engine.chat(prompt)
                 st.write(response.response)
                 message = {"role": "assistant", "content": response.response}
                 st.session_state.messages.append(message) # Add response to message history
