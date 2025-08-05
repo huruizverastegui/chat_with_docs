@@ -276,6 +276,7 @@ if password_input==password_unicef:
         chat_engine = index.as_chat_engine(
             chat_mode="condense_plus_context",
             memory=memory,
+            similarity_top_k=10,
             system_prompt=(
                 f""" Answer in a bullet point manner, be precise and provide examples.
                         Keep your answers based on facts – do not hallucinate features. You are based on {llm_model} 
