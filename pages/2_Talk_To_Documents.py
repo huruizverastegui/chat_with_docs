@@ -83,13 +83,14 @@ if password_input==password_unicef:
         st.session_state.chat_engine = None
     if "memory" not in st.session_state:
         st.session_state.memory = None
+    if "data_loaded" not in st.session_state:
+        st.session_state.data_loaded = False
 
     # Check if we need to reload data (container or model changed)
     need_reload = (
-        st.session_state.current_container != container_name or 
-        st.session_state.current_model != model_variable or
-        st.session_state.index is None
-    )
+    st.session_state.current_container != container_name or 
+    st.session_state.current_model != model_variable
+    ) and st.session_state.data_loaded
 
     # Get the API parameters for the Llama models hosted on Azure 
     if model_variable == "llama3-8B":
@@ -113,9 +114,22 @@ if password_input==password_unicef:
     st.sidebar.dataframe(blob_list, use_container_width=True)
 
     st.header("Start chatting with your documents 💬 📚")
+    
+    # Show current selections
+    st.info(f"Selected: **{container_name}** using **{model_variable}**")
+
+    # Add button to start/restart indexing
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        start_indexing = st.button("🔄 Load & Index Documents", type="primary")
+    with col2:
+        if st.session_state.data_loaded:
+            st.success(f"✅ Ready! ")
+        else:
+            st.warning("⚠️ Please click 'Load & Index Documents' to start chatting")
 
     # Reset messages when switching knowledge base or model
-    if need_reload:
+    if need_reload or start_indexing:
         st.session_state.messages = [
             {"role": "assistant", "content": "Ask me a question about the documents you uploaded!"}
         ]
@@ -291,15 +305,21 @@ if password_input==password_unicef:
         return chat_engine, memory
 
     # Load data only when needed (container or model changed)
-    if need_reload:
+    if need_reload or start_indexing:
         st.session_state.index, knowledge_docs = load_data(model_variable, container_name)
         st.session_state.chat_engine, st.session_state.memory = create_chat_engine(
             model_variable, st.session_state.index, container_name
         )
         st.session_state.current_container = container_name
         st.session_state.current_model = model_variable
+        st.session_state.data_loaded = True
         st.success("Documents loaded and indexed successfully!")
+        st.rerun()  # Refresh to update the UI state
     
+    if not st.session_state.data_loaded:
+        st.info("👆 Select your knowledge base and model, then click 'Load & Index Documents' to begin chatting.")
+        st.stop()
+
     if prompt := st.chat_input("Your question"): # Prompt for user input and save to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
         logger.info(f"User asked: {prompt} from {container_name} Knowledge base")# record into the log container
