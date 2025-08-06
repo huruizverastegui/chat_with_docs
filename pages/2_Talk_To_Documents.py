@@ -391,8 +391,8 @@ if password_input==password_unicef:
                 )
 
                 Settings.node_parser = SentenceSplitter(
-                    chunk_size=1024,  # Larger chunks = fewer API calls
-                    chunk_overlap=100,
+                    chunk_size=2048,  # Larger chunks = fewer API calls
+                    chunk_overlap=200,
                     paragraph_separator="\n\n",
                     secondary_chunking_regex="[.!?]+",
                 )
@@ -434,7 +434,7 @@ if password_input==password_unicef:
         chat_engine = index.as_chat_engine(
             chat_mode="condense_plus_context",
             memory=memory,
-            similarity_top_k=10,
+            similarity_top_k=60,
             system_prompt=(
                 f""" Answer in a bullet point manner, be precise and provide examples.
                         Keep your answers based on facts – do not hallucinate features. You are based on {llm_model} 
