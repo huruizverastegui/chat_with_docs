@@ -175,37 +175,51 @@ if password_input==password_unicef:
     def is_o_model(model_name):
         return model_name in ["o4-mini"]
     
-    # def validate_documents(knowledge_docs):
-    #     """Validate that documents have content and are not empty"""
-    #     if not knowledge_docs:
-    #         return False, "No documents found in the selected knowledge base."
-        
-    #     valid_docs = []
-    #     empty_files = []
-        
-    #     for doc in knowledge_docs:
-    #         # Check if document has actual text content
-    #         if hasattr(doc, 'text') and doc.text and doc.text.strip():
-    #             # Additional check for minimum content length
-    #             if len(doc.text.strip()) > 10:  # At least 10 characters
-    #                 valid_docs.append(doc)
-    #             else:
-    #                 filename = doc.metadata.get('file_name', 'Unknown file')
-    #                 empty_files.append(filename)
-    #         else:
-    #             filename = doc.metadata.get('file_name', 'Unknown file')
-    #             empty_files.append(filename)
-        
-    #     if not valid_docs:
-    #         if empty_files:
-    #             return False, f"All documents appear to be empty or have no readable content. Empty files: {', '.join(empty_files)}"
-    #         else:
-    #             return False, "No valid documents with readable content found."
-        
-    #     if empty_files:
-    #         st.warning(f"⚠️ Some files were skipped (empty or unreadable): {', '.join(empty_files)}")
-        
-    #     return True, f"Successfully validated documents."
+
+    def preprocess_query_for_o_models(query, container_name):
+                """Enhance queries for o-series models since they don't support system prompts"""
+
+                 # Check if this is a summary-type query
+                is_summary_query = any(word in query.lower() for word in [
+                        'summary', 'summarize', 'overview', 'all documents', 'comprehensive',
+                        'key findings', 'main points', 'across all', 'entire knowledge base'
+                    ])
+                
+                base_instruction = f"""
+        ANALYSIS CONTEXT: You are analyzing documents from the {container_name} knowledge base.
+
+        COMPREHENSIVE ANALYSIS REQUIREMENTS:
+        1. Search across ALL relevant documents in the knowledge base
+        2. Provide multi-document synthesis and cross-references
+        3. Use exact citation format [file_name - page_label] after each fact
+        4. Structure responses with clear sections and bullet points
+        5. Include specific examples, numbers, and details when available
+
+        """     
+                
+                if is_summary_query:
+                    enhanced_instruction = base_instruction + """
+        SUMMARY-SPECIFIC INSTRUCTIONS:
+        - Start with overview of ALL RELEVANT documents in the knowledge base AS ASKED BY THE USER
+        - Cover key findings from EACH individual relevant document
+        - Identify themes appearing across multiple relevant documents
+        - Include specific statistics, examples, and important details
+        - Note connections, patterns, and any contradictions between relevant documents
+        - Ensure no major document or topic is omitted
+
+        """
+                else:
+                    enhanced_instruction = base_instruction + """
+        QUERY-SPECIFIC INSTRUCTIONS:
+        - Look for information across multiple documents, not just top matches
+        - Provide comprehensive coverage of the topic from all relevant sources
+        - Include supporting details and examples from different documents
+        - Cross-reference related information between documents
+
+        """
+                
+                return enhanced_instruction + f"USER QUERY: {query}"
+    
 
     def validate_documents(knowledge_docs):
         """Validate that documents have content and are not empty"""
@@ -344,13 +358,26 @@ if password_input==password_unicef:
                                 api_key = azure_api_key , 
                                 max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "5000")) ,
                                 temperature=0.1,
-                                system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
-                                        Keep your answers based on facts – do not hallucinate features.
-                                        Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
-                                        Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
-                                        Example:
-                                        The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
-                                        """ )
+                                system_prompt="""You are an expert document analyst. When answering questions:
+                    
+                    1. COMPREHENSIVENESS: Always search across ALL relevant documents and provide information from multiple sources
+                    2. CITATIONS: Use exact format [file_name - page_label] after each fact or claim
+                    3. STRUCTURED RESPONSES: Organize answers with clear sections and bullet points
+                    4. COMPLETENESS: For summary requests, ensure you cover ALL major topics and documents
+                    5. CROSS-REFERENCING: Identify connections and patterns across different documents
+                    6. DETAIL LEVEL: Provide specific examples, numbers, and details when available
+                    
+                    For summary questions, structure your response as:
+                    • Overview of all documents
+                    • Key themes across documents  
+                    • Specific findings from each document
+                    • Cross-document patterns and connections
+                    • Important details and examples
+                    
+                    Always reference the source document and page for each piece of information.
+                    """ 
+                                
+                                )
                     
                 elif llm_model in ["gpt-4o-mini","gpt-4", "gpt-4o", "gpt-3.5-turbo","o4-mini"]:
                     deployment_name = get_azure_openai_deployment_name(llm_model)
@@ -372,13 +399,24 @@ if password_input==password_unicef:
                                     api_key=azure_openai_api_key,
                                     api_version=azure_openai_api_version,
                                     temperature=0.1,
-                                    system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
-                                            Keep your answers based on facts – do not hallucinate features.
-                                            Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
-                                            Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
-                                            Example:
-                                            The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
-                                            """ )
+                                    system_prompt="""You are an expert document analyst. When answering questions:
+                    
+                    1. COMPREHENSIVENESS: Always search across ALL relevant documents and provide information from multiple sources
+                    2. CITATIONS: Use exact format [file_name - page_label] after each fact or claim
+                    3. STRUCTURED RESPONSES: Organize answers with clear sections and bullet points
+                    4. COMPLETENESS: For summary requests, ensure you cover ALL major topics and documents
+                    5. CROSS-REFERENCING: Identify connections and patterns across different documents
+                    6. DETAIL LEVEL: Provide specific examples, numbers, and details when available
+                    
+                    For summary questions, structure your response as:
+                    • Overview of all documents
+                    • Key themes across documents  
+                    • Specific findings from each document
+                    • Cross-document patterns and connections
+                    • Important details and examples
+                    
+                    Always reference the source document and page for each piece of information.
+                    """  )
 
                 Settings.llm = llm_chat
                 
@@ -391,13 +429,13 @@ if password_input==password_unicef:
                 )
 
                 Settings.node_parser = SentenceSplitter(
-                    chunk_size=2048,  # Larger chunks = fewer API calls
-                    chunk_overlap=200,
+                    chunk_size=1024,  # Larger chunks = fewer API calls
+                    chunk_overlap=100,
                     paragraph_separator="\n\n",
                     secondary_chunking_regex="[.!?]+",
                 )
                 index = VectorStoreIndex.from_documents(knowledge_docs)
-                
+
             return index, knowledge_docs
 
     def create_chat_engine(llm_model, index, container_name):
@@ -434,15 +472,27 @@ if password_input==password_unicef:
         chat_engine = index.as_chat_engine(
             chat_mode="condense_plus_context",
             memory=memory,
-            similarity_top_k=60,
+            similarity_top_k=20,
             system_prompt=(
-                f""" Answer in a bullet point manner, be precise and provide examples.
-                        Keep your answers based on facts – do not hallucinate features. You are based on {llm_model} 
-                        Answer with all related knowledge docs from {container_name} . Always reference between phrases the ones you use. If you skip one, you will be penalized.
-                        Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
-                        Example:
-                        The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
-                        """ if not is_o_model(llm_model) else None  # o-series models don't support system_prompt in chat_engine
+                f"""You are an expert document analyst. When answering questions:
+                    
+                    1. COMPREHENSIVENESS: Always search across ALL relevant documents and provide information from multiple sources
+                    2. CITATIONS: Use exact format [file_name - page_label] after each fact or claim
+                    3. STRUCTURED RESPONSES: Organize answers with clear sections and bullet points
+                    4. COMPLETENESS: For summary requests, ensure you cover ALL major topics and documents
+                    5. CROSS-REFERENCING: Identify connections and patterns across different documents
+                    6. DETAIL LEVEL: Provide specific examples, numbers, and details when available
+                    
+                     
+                    For summary questions, structure your response as:
+                    • Overview of all relevant documents AS ASKED BY THE USER
+                    • Key themes across documents  
+                    • Specific findings from each document
+                    • Cross-document patterns and connections
+                    • Important details and examples
+                    
+                    Always reference the source document and page for each piece of information.
+                    """  if not is_o_model(llm_model) else None  # o-series models don't support system_prompt in chat_engine
             ),
             llm=llm_chat
         )
@@ -490,12 +540,20 @@ if password_input==password_unicef:
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    print(f"DEBUG: About to call chat_engine.chat() with prompt: '{prompt}'")
+                   
                     print(f"DEBUG: Chat engine exists: {st.session_state.chat_engine is not None}")
                     print(f"DEBUG: Current model: {st.session_state.current_model}")
                     print(f"DEBUG: Current container: {st.session_state.current_container}")
                     
-                    response = st.session_state.chat_engine.chat(prompt)
+                    #enrich prompt if it's an o type model 
+                    if is_o_model(model_variable):
+                        enriched_prompt = preprocess_query_for_o_models(prompt, container_name)
+                        print(f"DEBUG: About to call chat_engine.chat() with prompt: '{enriched_prompt}'")
+                        response = st.session_state.chat_engine.chat(enriched_prompt)
+
+                    else: 
+                        print(f"DEBUG: About to call chat_engine.chat() with prompt: '{prompt}'")
+                        response = st.session_state.chat_engine.chat(prompt)
                     
                     print(f"DEBUG: Response object type: {type(response)}")
                     print(f"DEBUG: Response object exists: {response is not None}")
