@@ -472,7 +472,7 @@ if password_input==password_unicef:
         chat_engine = index.as_chat_engine(
             chat_mode="condense_plus_context",
             memory=memory,
-            similarity_top_k=20,
+            similarity_top_k=10,
             system_prompt=(
                 f"""You are an expert document analyst. When answering questions:
                     
