@@ -102,11 +102,16 @@ def list_all_containers():
     return container_list
 
 
+
 def list_all_files(container_name):
-    blob_list = blob_service_client.get_container_client(container_name).list_blobs()
+    container = blob_service_client.get_container_client(container_name)
+    blobs = container.list_blobs()
     blob_list_display = []
-    for blob in blob_list:
-        blob_list_display.append(blob.name)
+    for blob in blobs:
+        blob_list_display.append({
+            "Name": blob.name,
+            "Size": blob.size        
+        })
     return blob_list_display
 
 
