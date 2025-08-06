@@ -289,9 +289,7 @@ if password_input==password_unicef:
         return True, f"Successfully validated {len(valid_docs)} document chunks from {len(file_stats)} files."
 
     def load_data(llm_model, container_name):
-        """Load data without caching to ensure fresh data per session"""
-        with st.spinner(text="Loading and indexing the provided docs – hang tight! This should take a couple of minutes."):
-
+       # """Load data without caching to ensure fresh data per session"""
             loader = AzStorageBlobReader(
                 container_name=container_name,
                 connection_string=connection_string_blob,
@@ -337,41 +335,14 @@ if password_input==password_unicef:
                 knowledge_docs = [doc for doc in knowledge_docs if hasattr(doc, 'text') and doc.text and len(doc.text.strip()) > 10]
                 st.success(f"✅ {validation_message}")
 
-            # define the model to use depending on the llm_model provided 
-                        
-            # 3 scenarios: Azure OpenAI GPT models, Llama models hosted on Azure, or fallback
-            if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B","llama-4-Scout"] :
-                llm_chat=OpenAI( api_base = azure_api_base ,
-                            api_key = azure_api_key , 
-                            max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "5000")) ,
-                            temperature=0.1,
-                            system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
-                                    Keep your answers based on facts – do not hallucinate features.
-                                    Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
-                                    Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
-                                    Example:
-                                    The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
-                                    """ )
-                
-            elif llm_model in ["gpt-4o-mini","gpt-4", "gpt-4o", "gpt-3.5-turbo","o4-mini"]:
-                deployment_name = get_azure_openai_deployment_name(llm_model)
+            with st.spinner(text="Loading and indexing the provided docs – hang tight! This should take a couple of minutes."):
 
-                if is_o_model(llm_model):
-                    llm_chat = AzureOpenAI( 
-                    engine=deployment_name,
-                    azure_endpoint=azure_openai_endpoint,
-                    api_key=azure_openai_api_key,
-                    api_version=azure_openai_api_version,
-                    # No temperature parameter for o models
-                    # No system_prompt parameter for o models
-                    )
-                    
-                else:
-                    llm_chat = AzureOpenAI( 
-                                engine=deployment_name,
-                                azure_endpoint=azure_openai_endpoint,
-                                api_key=azure_openai_api_key,
-                                api_version=azure_openai_api_version,
+                # define the model to use depending on the llm_model provided                  
+                # 3 scenarios: Azure OpenAI GPT models, Llama models hosted on Azure, or fallback
+                if llm_model in ["llama3-8B", "llama3-70B","llama3.1-70B","llama-4-Scout"] :
+                    llm_chat=OpenAI( api_base = azure_api_base ,
+                                api_key = azure_api_key , 
+                                max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "5000")) ,
                                 temperature=0.1,
                                 system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
                                         Keep your answers based on facts – do not hallucinate features.
@@ -380,25 +351,53 @@ if password_input==password_unicef:
                                         Example:
                                         The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
                                         """ )
+                    
+                elif llm_model in ["gpt-4o-mini","gpt-4", "gpt-4o", "gpt-3.5-turbo","o4-mini"]:
+                    deployment_name = get_azure_openai_deployment_name(llm_model)
 
-            Settings.llm = llm_chat
-            
-            Settings.embed_model = AzureOpenAIEmbedding(
-                model=embedding_deployment,
-                azure_endpoint=azure_openai_endpoint,
-                api_key=azure_openai_api_key,
-                api_version=azure_openai_api_version,
-                embed_batch_size=20
-            )
+                    if is_o_model(llm_model):
+                        llm_chat = AzureOpenAI( 
+                        engine=deployment_name,
+                        azure_endpoint=azure_openai_endpoint,
+                        api_key=azure_openai_api_key,
+                        api_version=azure_openai_api_version,
+                        # No temperature parameter for o models
+                        # No system_prompt parameter for o models
+                        )
+                        
+                    else:
+                        llm_chat = AzureOpenAI( 
+                                    engine=deployment_name,
+                                    azure_endpoint=azure_openai_endpoint,
+                                    api_key=azure_openai_api_key,
+                                    api_version=azure_openai_api_version,
+                                    temperature=0.1,
+                                    system_prompt=""" Answer in a bullet point manner, be precise and provide examples. 
+                                            Keep your answers based on facts – do not hallucinate features.
+                                            Answer with all related knowledge docs. Always reference between phrases the ones you use. If you skip one, you will be penalized.
+                                            Use the format [file_name - page_label] between sentences. Use the exact same "file_name" and "page_label" present in the knowledge_docs.
+                                            Example:
+                                            The CPD priorities for Myanmar are strenghtening public education systems [2017-PL10-Myanmar-CPD-ODS-EN.pdf - page 2]
+                                            """ )
 
-            Settings.node_parser = SentenceSplitter(
-                chunk_size=1024,  # Larger chunks = fewer API calls
-                chunk_overlap=100,
-                paragraph_separator="\n\n",
-                secondary_chunking_regex="[.!?]+",
-            )
-        
-            index = VectorStoreIndex.from_documents(knowledge_docs)
+                Settings.llm = llm_chat
+                
+                Settings.embed_model = AzureOpenAIEmbedding(
+                    model=embedding_deployment,
+                    azure_endpoint=azure_openai_endpoint,
+                    api_key=azure_openai_api_key,
+                    api_version=azure_openai_api_version,
+                    embed_batch_size=20
+                )
+
+                Settings.node_parser = SentenceSplitter(
+                    chunk_size=1024,  # Larger chunks = fewer API calls
+                    chunk_overlap=100,
+                    paragraph_separator="\n\n",
+                    secondary_chunking_regex="[.!?]+",
+                )
+                index = VectorStoreIndex.from_documents(knowledge_docs)
+                
             return index, knowledge_docs
 
     def create_chat_engine(llm_model, index, container_name):
