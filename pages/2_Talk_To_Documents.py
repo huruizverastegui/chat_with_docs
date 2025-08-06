@@ -32,7 +32,7 @@ from helpers.azhelpers import upload_to_azure_storage, list_all_containers, list
 
 import os 
 from dotenv import load_dotenv
-
+import pandas as pd
 from llama_index.readers.azstorage_blob import AzStorageBlobReader
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -69,8 +69,10 @@ if password_input==password_unicef:
 
     container_list = list_all_containers()
     container_list = [container for container in container_list if container.startswith("genai")]
-    container_name = st.sidebar.selectbox("Answering questions from", container_list)
-    model_variable = st.sidebar.selectbox("Powered by", ["o4-mini","gpt-4","gpt-4o","llama-4-Scout"])
+
+    st.sidebar.error("1️⃣ Select your knowledge base and model")
+    container_name = st.sidebar.selectbox("Knowledge base choice: ", container_list)
+    model_variable = st.sidebar.selectbox("Model choice: ", ["o4-mini","gpt-4","gpt-4o","llama-4-Scout"])
 
     # IMPORTANT: Initialize session state for user isolation
     if "current_container" not in st.session_state:
@@ -85,6 +87,8 @@ if password_input==password_unicef:
         st.session_state.memory = None
     if "data_loaded" not in st.session_state:
         st.session_state.data_loaded = False
+    if "current_warnings" not in st.session_state:
+        st.session_state.current_warnings = []
 
     # Check if we need to reload data (container or model changed)
     need_reload = (
@@ -111,25 +115,43 @@ if password_input==password_unicef:
 
     st.sidebar.write("Using these documents:")
     blob_list = list_all_files(container_name)
-    st.sidebar.dataframe(blob_list, use_container_width=True)
+    blob_list_df=pd.DataFrame(blob_list)
+    st.sidebar.dataframe(blob_list_df["Name"], use_container_width=True)
+
+    # detect zero‐byte blobs
+    blob_list_df=pd.DataFrame(blob_list)
+    if not blob_list_df.empty and "Size" in blob_list_df.columns:
+        zero_size_files = blob_list_df[blob_list_df["Size"] == 0]
+        if not zero_size_files.empty:
+            st.sidebar.error(f"⚠️ {len(zero_size_files)} empty files detected!")
+            names = zero_size_files["Name"].tolist()
+            md = "**Empty files:**\n\n" + "\n".join(f"- {n}" for n in names)
+            st.sidebar.markdown(md)
+
 
     st.header("Start chatting with your documents 💬 📚")
     
     # Show current selections
-    st.info(f"Selected: **{container_name}** using **{model_variable}**")
+    # st.info(f"Selected: **{container_name}** using **{model_variable}**")
 
     # Add button to start/restart indexing
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        start_indexing = st.button("🔄 Load & Index Documents", type="primary")
-    with col2:
-        if st.session_state.data_loaded:
-            st.success(f"✅ Ready! ")
-        else:
-            st.warning("⚠️ Please click 'Load & Index Documents' to start chatting")
+    st.error("2️⃣ Please click 'Load & Index Documents' to load the knowledge base")
+    start_indexing = st.button("🔄 Load & Index Documents", type="primary",use_container_width=True)
+    if st.session_state.data_loaded:
+            st.success(f"✅ Knowledge base loaded! ")
+
+            # Display any validation warnings
+            for warning in st.session_state.current_warnings:
+                st.warning(warning)
+
+            st.error("3️⃣ Start chatting")
+    
 
     # Reset messages when switching knowledge base or model
     if need_reload or start_indexing:
+
+        st.session_state.current_warnings = []  # Clear old warnings
+
         st.session_state.messages = [
             {"role": "assistant", "content": "Ask me a question about the documents you uploaded!"}
         ]
@@ -152,6 +174,119 @@ if password_input==password_unicef:
     # Helper function to check if model is o1 series
     def is_o_model(model_name):
         return model_name in ["o4-mini"]
+    
+    # def validate_documents(knowledge_docs):
+    #     """Validate that documents have content and are not empty"""
+    #     if not knowledge_docs:
+    #         return False, "No documents found in the selected knowledge base."
+        
+    #     valid_docs = []
+    #     empty_files = []
+        
+    #     for doc in knowledge_docs:
+    #         # Check if document has actual text content
+    #         if hasattr(doc, 'text') and doc.text and doc.text.strip():
+    #             # Additional check for minimum content length
+    #             if len(doc.text.strip()) > 10:  # At least 10 characters
+    #                 valid_docs.append(doc)
+    #             else:
+    #                 filename = doc.metadata.get('file_name', 'Unknown file')
+    #                 empty_files.append(filename)
+    #         else:
+    #             filename = doc.metadata.get('file_name', 'Unknown file')
+    #             empty_files.append(filename)
+        
+    #     if not valid_docs:
+    #         if empty_files:
+    #             return False, f"All documents appear to be empty or have no readable content. Empty files: {', '.join(empty_files)}"
+    #         else:
+    #             return False, "No valid documents with readable content found."
+        
+    #     if empty_files:
+    #         st.warning(f"⚠️ Some files were skipped (empty or unreadable): {', '.join(empty_files)}")
+        
+    #     return True, f"Successfully validated documents."
+
+    def validate_documents(knowledge_docs):
+        """Validate that documents have content and are not empty"""
+        print(f"DEBUG: Total documents received: {len(knowledge_docs)}")
+        
+        if not knowledge_docs:
+            return False, "No documents found in the selected knowledge base."
+        
+        valid_docs = []
+        file_stats = {}  # Track stats per file
+        
+        for i, doc in enumerate(knowledge_docs):
+            filename = doc.metadata.get('file_name', f'Unknown file {i}')
+            
+            # Initialize file stats if not exists
+            if filename not in file_stats:
+                file_stats[filename] = {
+                    'total_chunks': 0,
+                    'valid_chunks': 0,
+                    'invalid_chunks': 0,
+                    'total_text_length': 0
+                }
+            
+            file_stats[filename]['total_chunks'] += 1
+            
+            # Check if document has actual text content
+            has_text_attr = hasattr(doc, 'text')
+            text_content = getattr(doc, 'text', None)
+            text_length = len(text_content.strip()) if text_content else 0
+            
+            if has_text_attr and text_content and text_content.strip():
+                if len(text_content.strip()) > 10:  # At least 10 characters
+                    valid_docs.append(doc)
+                    file_stats[filename]['valid_chunks'] += 1
+                    file_stats[filename]['total_text_length'] += text_length
+                    print(f"DEBUG: Document {i+1} ({filename}): VALID ✅ ({text_length} chars)")
+                else:
+                    file_stats[filename]['invalid_chunks'] += 1
+                    print(f"DEBUG: Document {i+1} ({filename}): TOO SHORT ⚠️ ({text_length} chars)")
+            else:
+                file_stats[filename]['invalid_chunks'] += 1
+                print(f"DEBUG: Document {i+1} ({filename}): EMPTY/NO TEXT ❌")
+        
+        # Analyze file-level results
+        completely_empty_files = []
+        files_with_some_valid_content = []
+        
+        for filename, stats in file_stats.items():
+            print(f"DEBUG: File '{filename}' summary:")
+            print(f"  - Total chunks: {stats['total_chunks']}")
+            print(f"  - Valid chunks: {stats['valid_chunks']}")
+            print(f"  - Invalid chunks: {stats['invalid_chunks']}")
+            print(f"  - Total text length: {stats['total_text_length']}")
+            
+            if stats['valid_chunks'] == 0:
+                # No valid chunks at all
+                completely_empty_files.append(filename)
+            elif stats['invalid_chunks'] > 0:
+                # Some chunks are invalid but file has valid content
+                files_with_some_valid_content.append(filename)
+        
+        print(f"DEBUG: Valid documents total: {len(valid_docs)}")
+        print(f"DEBUG: Completely empty files: {completely_empty_files}")
+        print(f"DEBUG: Files with some valid content: {files_with_some_valid_content}")
+        
+        if not valid_docs:
+            if completely_empty_files:
+                return False, f"All documents appear to be empty or have no readable content. Empty files: {', '.join(completely_empty_files)}"
+            else:
+                return False, "No valid documents with readable content found."
+        
+        # Only warn about completely empty files, not files with some invalid chunks
+        if completely_empty_files:
+            warning_msg = f"⚠️ Some files were completely empty or unreadable: {', '.join(completely_empty_files)}"
+            st.session_state.current_warnings = [warning_msg]
+            print(f"DEBUG: Warning stored: {warning_msg}")
+        else:
+            st.session_state.current_warnings = []
+            print("DEBUG: No warnings to store - all files have some valid content")
+
+        return True, f"Successfully validated {len(valid_docs)} document chunks from {len(file_stats)} files."
 
     def load_data(llm_model, container_name):
         """Load data without caching to ensure fresh data per session"""
@@ -191,6 +326,16 @@ if password_input==password_unicef:
 
             with ThreadPoolExecutor(max_workers=4) as executor:
                 knowledge_docs = list(executor.map(clean_doc_metadata, knowledge_docs))
+                # Validate documents before indexing
+                is_valid, validation_message = validate_documents(knowledge_docs)
+                if not is_valid:
+                    st.error(f"❌ Document validation failed: {validation_message}")
+                    st.error("Please upload valid documents with readable content to this knowledge base.")
+                    st.stop()
+
+                # Filter out empty documents
+                knowledge_docs = [doc for doc in knowledge_docs if hasattr(doc, 'text') and doc.text and len(doc.text.strip()) > 10]
+                st.success(f"✅ {validation_message}")
 
             # define the model to use depending on the llm_model provided 
                         
@@ -306,18 +451,31 @@ if password_input==password_unicef:
 
     # Load data only when needed (container or model changed)
     if need_reload or start_indexing:
-        st.session_state.index, knowledge_docs = load_data(model_variable, container_name)
-        st.session_state.chat_engine, st.session_state.memory = create_chat_engine(
-            model_variable, st.session_state.index, container_name
-        )
-        st.session_state.current_container = container_name
-        st.session_state.current_model = model_variable
-        st.session_state.data_loaded = True
-        st.success("Documents loaded and indexed successfully!")
-        st.rerun()  # Refresh to update the UI state
-    
+        try:
+            st.session_state.index, knowledge_docs = load_data(model_variable, container_name)
+            
+            # Additional check after indexing
+            if st.session_state.index is None:
+                st.error("❌ Failed to create search index. Please check your documents.")
+                st.session_state.data_loaded = False
+                st.stop()
+            
+            st.session_state.chat_engine, st.session_state.memory = create_chat_engine(
+                model_variable, st.session_state.index, container_name
+            )
+            st.session_state.current_container = container_name
+            st.session_state.current_model = model_variable
+            st.session_state.data_loaded = True
+            st.success("Documents loaded and indexed successfully!")
+            st.rerun()  # Refresh to update the UI state
+            
+        except Exception as e:
+            st.error(f"❌ Error loading documents: {str(e)}")
+            st.error("This usually happens when documents are empty or corrupted. Please check your files.")
+            st.session_state.data_loaded = False
+            st.stop()
+        
     if not st.session_state.data_loaded:
-        st.info("👆 Select your knowledge base and model, then click 'Load & Index Documents' to begin chatting.")
         st.stop()
 
     if prompt := st.chat_input("Your question"): # Prompt for user input and save to chat history
@@ -328,12 +486,53 @@ if password_input==password_unicef:
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-    # If last message is not from assistant, generate a new response
+
     if st.session_state.messages[-1]["role"] != "assistant":
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                response = st.session_state.chat_engine.chat(prompt)
-                st.write(response.response)
-                message = {"role": "assistant", "content": response.response}
-                st.session_state.messages.append(message) # Add response to message history
-                logger.info(f"{model_variable} Model answered: {response} -- from {container_name} Knowledge base")
+                try:
+                    print(f"DEBUG: About to call chat_engine.chat() with prompt: '{prompt}'")
+                    print(f"DEBUG: Chat engine exists: {st.session_state.chat_engine is not None}")
+                    print(f"DEBUG: Current model: {st.session_state.current_model}")
+                    print(f"DEBUG: Current container: {st.session_state.current_container}")
+                    
+                    response = st.session_state.chat_engine.chat(prompt)
+                    
+                    print(f"DEBUG: Response object type: {type(response)}")
+                    print(f"DEBUG: Response object exists: {response is not None}")
+                    
+                    if response:
+                        print(f"DEBUG: Response has 'response' attribute: {hasattr(response, 'response')}")
+                        if hasattr(response, 'response'):
+                            response_text = response.response
+                            print(f"DEBUG: Response text type: {type(response_text)}")
+                            print(f"DEBUG: Response text length: {len(response_text) if response_text else 0}")
+                            print(f"DEBUG: Response text (first 200 chars): {repr(response_text[:200]) if response_text else 'None'}")
+                            
+                            if response_text and response_text.strip():
+                                st.write(response_text)
+                                message = {"role": "assistant", "content": response_text}
+                                st.session_state.messages.append(message)
+                                print(f"DEBUG: Successfully added response to messages")
+                            else:
+                                st.error("❌ Response is empty or contains only whitespace")
+                                print("DEBUG: Response text is empty or whitespace only")
+                        else:
+                            print(f"DEBUG: Response object attributes: {dir(response)}")
+                            st.error("❌ Response object doesn't have 'response' attribute")
+                    
+                    if not response or not hasattr(response, 'response') or not response.response:
+                        st.error("❌ No response generated. The knowledge base might be empty or corrupted.")
+                        print("DEBUG: Failed response validation checks")
+                        
+                except AssertionError as e:
+                    print(f"DEBUG: AssertionError: {str(e)}")
+                    st.error("❌ Error: The knowledge base appears to be empty or has no searchable content.")
+                    st.error("Please upload documents with readable text content.")
+                    st.stop()
+                except Exception as e:
+                    print(f"DEBUG: Exception during chat: {type(e).__name__}: {str(e)}")
+                    import traceback
+                    print(f"DEBUG: Full traceback:\n{traceback.format_exc()}")
+                    st.error(f"❌ Error generating response: {str(e)}")
+                    st.stop()
