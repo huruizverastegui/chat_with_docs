@@ -89,6 +89,26 @@ if password_input==password_unicef:
         st.session_state.data_loaded = False
     if "current_warnings" not in st.session_state:
         st.session_state.current_warnings = []
+    if "similarity_top_k" not in st.session_state:
+        st.session_state.similarity_top_k = 15
+    if "system_prompt" not in st.session_state:
+        st.session_state.system_prompt = """You are an expert document analyst. When answering questions:
+
+        1. COMPREHENSIVENESS: Always search across ALL relevant documents and provide information from multiple sources
+        2. CITATIONS: Use exact format [file_name - page_label] after each fact or claim
+        3. STRUCTURED RESPONSES: Organize answers with clear sections and bullet points
+        4. COMPLETENESS: For summary requests, ensure you cover ALL major topics and documents
+        5. CROSS-REFERENCING: Identify connections and patterns across different documents
+        6. DETAIL LEVEL: Provide specific examples, numbers, and details when available
+
+        For summary questions, structure your response as:
+        • Overview of all relevant documents AS ASKED BY THE USER
+        • Key themes across documents
+        • Specific findings from each document
+        • Cross-document patterns and connections
+        • Important details and examples
+        Always reference the source document and page for each piece of information."""
+
 
     # Check if we need to reload data (container or model changed)
     need_reload = (
@@ -134,17 +154,106 @@ if password_input==password_unicef:
     # Show current selections
     # st.info(f"Selected: **{container_name}** using **{model_variable}**")
 
+
+
+
+
+
+    # allow for parameter update 
+    st.error(" 2️⃣ Adjust model's parameters if needed (for advanced use only) - Do not update them once you started chatting")
+    with st.expander("🔧 Advanced Parameters", expanded=False):              
+
+        # System Prompt configuration
+        col1, col2 = st.columns([0.95, 0.05])
+        with col1:
+            system_prompt = st.text_area(
+                "System Prompt - Define how the AI should behave and respond to queries",
+                value=st.session_state.system_prompt,
+                height=250,
+                key="system_prompt_input"
+                
+            )
+        with col2:
+            st.markdown(" ", help="""**What is a System Prompt?**
+
+        The system prompt defines the AI's behavior, personality, and response style. It acts as instructions that guide how the model interprets and answers your questions.
+
+        **How to define a good system prompt:**
+        • Be specific about the desired output format
+        • Define the level of detail you want
+        • Specify citation requirements
+        • Include any domain-specific expertise needed
+        • Set the tone (formal, casual, technical, etc.)
+        • Mention any constraints or requirements
+
+        **Examples:**
+        • "Be concise and technical" for brief answers
+        • "Provide detailed explanations with examples" for comprehensive responses
+        • "Focus on financial implications" for business documents""")
+
+        # Similarity Top K configuration
+        col3, col4 = st.columns([0.95, 0.05])
+        with col3:
+            similarity_top_k = st.slider(
+                "Similarity Top K - Number of most relevant document chunks to retrieve for each query",
+                min_value=5,
+                max_value=75,
+                value=st.session_state.similarity_top_k,
+                step=5,
+                key="similarity_top_k_input"
+                
+            )
+        with col4:
+            st.markdown(" ", help="""**What is Similarity Top K?**
+
+            This parameter controls how many of the most relevant document chunks are retrieved to answer your question.
+
+            **Low values (5-15):**
+            • Faster responses
+            • More focused answers
+            • Good for specific, targeted questions
+            • May miss some relevant information
+
+            **Medium values (15-35):**
+            • Balanced approach
+            • Good for most use cases
+            • Comprehensive without being overwhelming
+
+            **High values (35-75):**
+            • Most comprehensive answers
+            • Better for complex questions requiring broad context
+            • Slower responses
+            • May include some less relevant information
+            • Best for summary requests across multiple documents""")
+
+        
+        # Update session state when values change
+        if system_prompt != st.session_state.system_prompt:
+            st.session_state.system_prompt = system_prompt
+            # If data is already loaded, we need to reload to apply new system prompt
+            if st.session_state.data_loaded:
+                need_reload = True
+        
+        if similarity_top_k != st.session_state.similarity_top_k:
+            st.session_state.similarity_top_k = similarity_top_k
+            # If data is already loaded, we need to reload to apply new similarity_top_k
+            if st.session_state.data_loaded:
+                need_reload = True
+
+
+
     # Add button to start/restart indexing
-    st.error("2️⃣ Please click 'Load & Index Documents' to load the knowledge base")
+    st.error("3️⃣ Please click 'Load & Index Documents' to load the knowledge base")
     start_indexing = st.button("🔄 Load & Index Documents", type="primary",use_container_width=True)
+
     if st.session_state.data_loaded:
-            st.success(f"✅ Knowledge base loaded! ")
-
-            # Display any validation warnings
-            for warning in st.session_state.current_warnings:
-                st.warning(warning)
-
-            st.error("3️⃣ Start chatting")
+        st.success(f"✅ Knowledge base loaded! ")
+        # Display any validation warnings
+        for warning in st.session_state.current_warnings:
+            st.warning(warning)
+    
+    if st.session_state.data_loaded:
+        st.error("4️⃣ Start chatting")
     
 
     # Reset messages when switching knowledge base or model
@@ -176,49 +285,11 @@ if password_input==password_unicef:
         return model_name in ["o4-mini"]
     
 
-    def preprocess_query_for_o_models(query, container_name):
+    def preprocess_query_for_o_models(query,  custom_system_prompt, container_name):
                 """Enhance queries for o-series models since they don't support system prompts"""
 
-                 # Check if this is a summary-type query
-                is_summary_query = any(word in query.lower() for word in [
-                        'summary', 'summarize', 'overview', 'all documents', 'comprehensive',
-                        'key findings', 'main points', 'across all', 'entire knowledge base'
-                    ])
-                
-                base_instruction = f"""
-        ANALYSIS CONTEXT: You are analyzing documents from the {container_name} knowledge base.
-
-        COMPREHENSIVE ANALYSIS REQUIREMENTS:
-        1. Search across ALL relevant documents in the knowledge base
-        2. Provide multi-document synthesis and cross-references
-        3. Use exact citation format [file_name - page_label] after each fact
-        4. Structure responses with clear sections and bullet points
-        5. Include specific examples, numbers, and details when available
-
-        """     
-                
-                if is_summary_query:
-                    enhanced_instruction = base_instruction + """
-        SUMMARY-SPECIFIC INSTRUCTIONS:
-        - Start with overview of ALL RELEVANT documents in the knowledge base AS ASKED BY THE USER
-        - Cover key findings from EACH individual relevant document
-        - Identify themes appearing across multiple relevant documents
-        - Include specific statistics, examples, and important details
-        - Note connections, patterns, and any contradictions between relevant documents
-        - Ensure no major document or topic is omitted
-
-        """
-                else:
-                    enhanced_instruction = base_instruction + """
-        QUERY-SPECIFIC INSTRUCTIONS:
-        - Look for information across multiple documents, not just top matches
-        - Provide comprehensive coverage of the topic from all relevant sources
-        - Include supporting details and examples from different documents
-        - Cross-reference related information between documents
-
-        """
-                
-                return enhanced_instruction + f"USER QUERY: {query}"
+                enhanced_instruction = custom_system_prompt + f" - USER QUERY: {query}"
+                return enhanced_instruction 
     
 
     def validate_documents(knowledge_docs):
@@ -302,7 +373,7 @@ if password_input==password_unicef:
 
         return True, f"Successfully validated {len(valid_docs)} document chunks from {len(file_stats)} files."
 
-    def load_data(llm_model, container_name):
+    def load_data(llm_model, container_name, custom_system_prompt):
        # """Load data without caching to ensure fresh data per session"""
             loader = AzStorageBlobReader(
                 container_name=container_name,
@@ -358,24 +429,7 @@ if password_input==password_unicef:
                                 api_key = azure_api_key , 
                                 max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "5000")) ,
                                 temperature=0.1,
-                                system_prompt="""You are an expert document analyst. When answering questions:
-                    
-                    1. COMPREHENSIVENESS: Always search across ALL relevant documents and provide information from multiple sources
-                    2. CITATIONS: Use exact format [file_name - page_label] after each fact or claim
-                    3. STRUCTURED RESPONSES: Organize answers with clear sections and bullet points
-                    4. COMPLETENESS: For summary requests, ensure you cover ALL major topics and documents
-                    5. CROSS-REFERENCING: Identify connections and patterns across different documents
-                    6. DETAIL LEVEL: Provide specific examples, numbers, and details when available
-                    
-                    For summary questions, structure your response as:
-                    • Overview of all documents
-                    • Key themes across documents  
-                    • Specific findings from each document
-                    • Cross-document patterns and connections
-                    • Important details and examples
-                    
-                    Always reference the source document and page for each piece of information.
-                    """ 
+                                system_prompt=custom_system_prompt
                                 
                                 )
                     
@@ -399,24 +453,7 @@ if password_input==password_unicef:
                                     api_key=azure_openai_api_key,
                                     api_version=azure_openai_api_version,
                                     temperature=0.1,
-                                    system_prompt="""You are an expert document analyst. When answering questions:
-                    
-                    1. COMPREHENSIVENESS: Always search across ALL relevant documents and provide information from multiple sources
-                    2. CITATIONS: Use exact format [file_name - page_label] after each fact or claim
-                    3. STRUCTURED RESPONSES: Organize answers with clear sections and bullet points
-                    4. COMPLETENESS: For summary requests, ensure you cover ALL major topics and documents
-                    5. CROSS-REFERENCING: Identify connections and patterns across different documents
-                    6. DETAIL LEVEL: Provide specific examples, numbers, and details when available
-                    
-                    For summary questions, structure your response as:
-                    • Overview of all documents
-                    • Key themes across documents  
-                    • Specific findings from each document
-                    • Cross-document patterns and connections
-                    • Important details and examples
-                    
-                    Always reference the source document and page for each piece of information.
-                    """  )
+                                    system_prompt=custom_system_prompt )
 
                 Settings.llm = llm_chat
                 
@@ -438,7 +475,7 @@ if password_input==password_unicef:
 
             return index, knowledge_docs
 
-    def create_chat_engine(llm_model, index, container_name):
+    def create_chat_engine(llm_model, index, container_name, custom_system_prompt, custom_similarity_top_k):
         """Create a new chat engine for the current session"""
         
         # Create fresh memory for this session
@@ -472,28 +509,9 @@ if password_input==password_unicef:
         chat_engine = index.as_chat_engine(
             chat_mode="condense_plus_context",
             memory=memory,
-            similarity_top_k=10,
-            system_prompt=(
-                f"""You are an expert document analyst. When answering questions:
-                    
-                    1. COMPREHENSIVENESS: Always search across ALL relevant documents and provide information from multiple sources
-                    2. CITATIONS: Use exact format [file_name - page_label] after each fact or claim
-                    3. STRUCTURED RESPONSES: Organize answers with clear sections and bullet points
-                    4. COMPLETENESS: For summary requests, ensure you cover ALL major topics and documents
-                    5. CROSS-REFERENCING: Identify connections and patterns across different documents
-                    6. DETAIL LEVEL: Provide specific examples, numbers, and details when available
-                    
-                     
-                    For summary questions, structure your response as:
-                    • Overview of all relevant documents AS ASKED BY THE USER
-                    • Key themes across documents  
-                    • Specific findings from each document
-                    • Cross-document patterns and connections
-                    • Important details and examples
-                    
-                    Always reference the source document and page for each piece of information.
-                    """  if not is_o_model(llm_model) else None  # o-series models don't support system_prompt in chat_engine
-            ),
+            similarity_top_k=custom_similarity_top_k ,
+            system_prompt=( custom_system_prompt if not is_o_model(llm_model) else None  # o-series models don't support system_prompt in chat_engine
+                                ),
             llm=llm_chat
         )
         return chat_engine, memory
@@ -501,7 +519,7 @@ if password_input==password_unicef:
     # Load data only when needed (container or model changed)
     if need_reload or start_indexing:
         try:
-            st.session_state.index, knowledge_docs = load_data(model_variable, container_name)
+            st.session_state.index, knowledge_docs = load_data(model_variable, container_name,st.session_state.system_prompt)
             
             # Additional check after indexing
             if st.session_state.index is None:
@@ -510,7 +528,7 @@ if password_input==password_unicef:
                 st.stop()
             
             st.session_state.chat_engine, st.session_state.memory = create_chat_engine(
-                model_variable, st.session_state.index, container_name
+                model_variable, st.session_state.index, container_name, st.session_state.system_prompt, st.session_state.similarity_top_k
             )
             st.session_state.current_container = container_name
             st.session_state.current_model = model_variable
@@ -544,10 +562,14 @@ if password_input==password_unicef:
                     print(f"DEBUG: Chat engine exists: {st.session_state.chat_engine is not None}")
                     print(f"DEBUG: Current model: {st.session_state.current_model}")
                     print(f"DEBUG: Current container: {st.session_state.current_container}")
+                    print(f"DEBUG: similarity_top_k : {st.session_state.similarity_top_k}")
+                    print(f"DEBUG: system_prompt: {st.session_state.system_prompt}")
+            
+
                     
                     #enrich prompt if it's an o type model 
                     if is_o_model(model_variable):
-                        enriched_prompt = preprocess_query_for_o_models(prompt, container_name)
+                        enriched_prompt = preprocess_query_for_o_models(prompt, st.session_state.system_prompt, container_name)
                         print(f"DEBUG: About to call chat_engine.chat() with prompt: '{enriched_prompt}'")
                         response = st.session_state.chat_engine.chat(enriched_prompt)
 
