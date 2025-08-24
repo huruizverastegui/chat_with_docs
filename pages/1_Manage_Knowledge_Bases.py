@@ -7,8 +7,7 @@ try:
   from llama_index import VectorStoreIndex, ServiceContext, Document, SimpleDirectoryReader
 except ImportError:
   from llama_index.core import VectorStoreIndex, ServiceContext, Document, SimpleDirectoryReader
-import time 
-from time import time
+import time
 from azure.storage.blob import BlobServiceClient
 from io import BytesIO
 from datetime import datetime
@@ -87,6 +86,9 @@ import requests, json
 
 
 load_dotenv() 
+password_unicef =os.environ["APP_PASSWORD"]
+
+
 
 
 def delete_kb_resources(container: str, *, drop_index: bool = True) -> None:
@@ -156,6 +158,9 @@ def sanitize_container_name(name):
     # Remove leading/trailing hyphens
     name = name.strip('-')
     
+    # add genai- prefix
+    name = f"genai-{name}"
+
     # Ensure minimum length of 3 characters
     if len(name) < 3:
         name = name + 'kb'  # Add 'kb' for knowledge base
@@ -187,26 +192,62 @@ def render_indexer_status(container: str):
     except ResourceNotFoundError:
         st.warning("Indexer not found yet.")
 
-def wait_until_index_ready(container: str, timeout_sec: int = 30, poll_sec: int = 2) -> bool:
-    """Short, polite poll to detect first successful run; returns True if ready."""
+def wait_until_index_ready_enhanced(container: str, timeout_sec: int = 120, poll_sec: int = 3) -> tuple[bool, str]:
+    """
+    Enhanced version with better feedback and longer timeout for large documents.
+    Returns (success: bool, message: str)
+    """
     names = kb_names(container)
-    with st.status(f"Indexing **{container}** …", expanded=True) as status_box:
-        start = time.time()
-        while True:
-            s = indexer_client.get_indexer_status(names["indexer"])
-            last = getattr(s, "last_result", None)
-            last_status = getattr(last, "status", None)  # 'success', 'inProgress', 'transientFailure', ...
-            status_box.write(f"Service: {s.status} • Last run: {last_status or 'n/a'}")
-            if last_status == "success":
-                status_box.update(label="Index ready ✓", state="complete")
-                return True
-            if last_status in {"error", "transientFailure"}:
-                status_box.update(label=f"Indexing failed: {getattr(last,'error_message','')}", state="error")
-                return False
-            if time.time() - start >= timeout_sec:
-                status_box.update(label="Indexer still running; will finish shortly.", state="running")
-                return False
-            time.sleep(poll_sec)
+    
+    # Create progress indicators
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    start_time = time.time()  # Use time.time() with proper module import
+    attempts = 0
+    max_attempts = timeout_sec // poll_sec
+    
+    try:
+        while attempts < max_attempts:
+            elapsed = time.time() - start_time  # Use time.time() with proper module import
+            progress = min(elapsed / timeout_sec, 0.95)  # Cap at 95% until completion
+            progress_bar.progress(progress)
+            
+            try:
+                s = indexer_client.get_indexer_status(names["indexer"])
+                service_status = s.status
+                last = getattr(s, "last_result", None)
+                last_status = getattr(last, "status", None)
+                last_err = getattr(last, "error_message", "")
+                
+                # Update status text
+                if last_status == "inProgress":
+                    status_text.info(f"🔄 Indexing in progress... ({elapsed:.0f}s elapsed)")
+                elif last_status == "success":
+                    progress_bar.progress(1.0)
+                    status_text.empty()
+                    return True, "Indexing completed successfully!"
+                elif last_status in {"error", "transientFailure"}:
+                    progress_bar.empty()
+                    status_text.empty()
+                    return False, f"Indexing failed: {last_err or 'Unknown error'}"
+                else:
+                    status_text.info(f"⏳ Preparing indexer... ({elapsed:.0f}s elapsed)")
+                    
+            except ResourceNotFoundError:
+                status_text.warning("⚠️ Indexer not found, creating resources...")
+            except Exception as e:
+                status_text.error(f"Error checking status: {str(e)}")
+            
+            time.sleep(poll_sec)  # Use time.sleep() with proper module import
+            attempts += 1
+            
+    finally:
+        # Clean up UI elements
+        progress_bar.empty()
+        status_text.empty()
+    
+    # Timeout reached
+    return False, f"Indexing is still in progress after {timeout_sec}s. Check Azure portal for completion."
 
 def show_ready_badge_and_count(container: str):
     """Small success banner + chunk count once ready."""
@@ -310,7 +351,8 @@ def put_skillset_raw(*, skillset_name: str, index_name: str):
         raise RuntimeError(f"Skillset upsert failed: {r.status_code} {r.text}")
 
 def kb_names(container: str):
-    s = sanitize_container_name(container)
+    # s = sanitize_container_name(container)
+    s = container
     return {
         "index":      f"kb-{s}",
         "datasource": f"ds-{s}",
@@ -442,64 +484,105 @@ def show_indexer_status(container: str):
     except ResourceNotFoundError:
         st.caption("Indexer not found yet.")
 
+password_input = st.text_input("Enter a password", type="password")
+
+if password_input==password_unicef:
 
 
-with st.expander("Create a new Knowledge Base", expanded=False):
-    new_container_name = st.text_input("Name your new Knowledge Base")
-    create_container = st.button("Create", type='primary')
-    if create_container:
-        if new_container_name.strip():
-            sanitized_container_name = sanitize_container_name(new_container_name)
-            created_container_name = create_new_container(sanitized_container_name)
+    with st.expander("Create a new Knowledge Base", expanded=False):
+        new_container_name = st.text_input("Name your new Knowledge Base")
+        create_container = st.button("Create", type='primary')
+        if create_container:
+            if new_container_name.strip():
+                sanitized_container_name = sanitize_container_name(new_container_name)
+                create_result = create_new_container(sanitized_container_name)
 
-            # 🔹 Ensure Search index + pipeline, then run once
-            ensure_kb_resources(created_container_name)
-            run_kb_indexer(created_container_name)
+                # 🔹 Ensure Search index + pipeline, then run once
+                ensure_kb_resources(sanitized_container_name)  # Use sanitized_container_name instead
+                run_kb_indexer(sanitized_container_name)       # Use sanitized_container_name instead
 
-            st.success(f"Created KB and Search pipeline for: {sanitized_container_name}")
-            if sanitized_container_name != new_container_name.lower():
-                st.info(f"Note: sanitized to '{sanitized_container_name}'.")
-            container_name = created_container_name
+                st.success(f"Created KB and Search pipeline for: {sanitized_container_name}")
+                if sanitized_container_name != new_container_name.lower():
+                    st.info(f"Note: sanitized to '{sanitized_container_name}'.")
+                container_name = sanitized_container_name  # Use sanitized_container_name instead
+            else:
+                st.error("Please enter a valid container name.")
+
+
+    left, right = st.columns(2)
+
+    with left:
+        container_name = st.selectbox("Manage this Knowledge Base", list_all_containers())
+        delete_container = st.button(f"Delete all files in {container_name}", type='primary')
+        if delete_container:
+                with st.spinner(f"Deleting all resources for {container_name}..."):
+                    # 1) Wipe blob files (your existing helper)
+                    delete_all_files(container_name)
+
+                    # 2) Tear down Search artifacts (indexer, skillset, data source, index)
+                    delete_kb_resources(container_name, drop_index=True)
+                
+                st.success(f"✅ Deleted KB '{container_name}': files removed and index dropped.")
+
+    with right:
+        file_list = st.container()
+        write_file_list()
+        
+        
+
+    uploaded_files = st.file_uploader(f"Add files to {container_name}",
+                                    type=["pdf", "docx"], accept_multiple_files=True)
+    upload_confirm = st.button("Upload now")
+
+
+    if upload_confirm and uploaded_files:
+        # Show configuration info
+        with st.expander("Configuration Details", expanded=False):
+            st.caption(f"AOAI endpoint for skill: {AZURE_OPENAI_ENDPOINT}")
+            st.caption(f"Embedding deployment: {AZURE_EMBEDDING_DEPLOYMENT} (dims={EMBED_DIM})")
+            st.caption(f"Blob DS conn string starts with: {os.getenv('SEARCH_BLOB_CONNECTION_STRING','')[:30]}")
+        
+        # Upload files with progress
+        upload_progress = st.progress(0)
+        upload_status = st.empty()
+        
+        total_files = len(uploaded_files)
+        for i, uploaded_file in enumerate(uploaded_files):
+            upload_status.info(f"📁 Uploading {uploaded_file.name}...")
+            upload_to_azure_storage(uploaded_file, container_name)
+            upload_progress.progress((i + 1) / total_files)
+        
+        upload_status.success(f"✅ Uploaded {total_files} file(s) to {container_name}")
+        upload_progress.empty()
+        
+        # Refresh file list
+        write_file_list()
+
+        # 🔹 Make sure resources exist (safe/idempotent), then reindex
+        with st.spinner("Setting up search resources..."):
+            ensure_kb_resources(container_name)
+            run_kb_indexer(container_name)
+
+        # 🔹 Enhanced indexing status with loading indicators
+        st.info("🚀 Starting document indexing process...")
+        
+        # Wait for indexing to complete with enhanced feedback
+        success, message = wait_until_index_ready_enhanced(container_name, timeout_sec=180)
+        
+        if success:
+            st.success(f"🎉 {message}")
+            show_ready_badge_and_count(container_name)
+            st.balloons()  # Celebration animation!
         else:
-            st.error("Please enter a valid container name.")
+            st.warning(f"⚠️ {message}")
+            st.info("💡 You can continue using the app. Indexing will complete in the background.")
+            
+            # Show current status for reference
+            with st.expander("Current Indexer Status"):
+                render_indexer_status(container_name)
 
+    elif upload_confirm and not uploaded_files:
+        st.warning("⚠️ Please select files to upload first.")
 
-left, right = st.columns(2)
-with left:
-   container_name = st.selectbox("Manage this Knowledge Base", list_all_containers())
-   delete_container = st.button(f"Delete all files in {container_name}", type='primary')
-   if delete_container:
-    # 1) Wipe blob files (your existing helper)
-    delete_all_files(container_name)
-
-    # 2) Tear down Search artifacts (indexer, skillset, data source, index)
-    delete_kb_resources(container_name, drop_index=True)
-    st.success(f"Deleted KB '{container_name}': files removed and index dropped.")
-
-with right:
-    file_list = st.container()
-    write_file_list()
-        
-        
-
-uploaded_files = st.file_uploader(f"Add files to {container_name}",
-                                  type=["pdf", "docx"], accept_multiple_files=True)
-upload_confirm = st.button("Upload now")
-
-
-if upload_confirm:
-    st.caption(f"AOAI endpoint for skill: {AZURE_OPENAI_ENDPOINT}")
-    st.caption(f"Embedding deployment: {AZURE_EMBEDDING_DEPLOYMENT} (dims={EMBED_DIM})")
-    st.caption(f"Blob DS conn string starts with: {os.getenv('SEARCH_BLOB_CONNECTION_STRING','')[:30]}")
-    
-    for uploaded_file in uploaded_files or []:
-        upload_to_azure_storage(uploaded_file, container_name)
-        st.success(f"Uploaded {uploaded_file.name} to {container_name}")
-    write_file_list()
-
-    # 🔹 Make sure resources exist (safe/idempotent), then reindex
-    ensure_kb_resources(container_name)
-    run_kb_indexer(container_name)
-    show_indexer_status(container_name)
-
-    st.info("Reindex kicked off. You can also check the indexer status in the Azure portal.")
+else:
+    st.error("Please enter the correct password to access the application.")
