@@ -21,16 +21,9 @@ llamaindex-py-client
 openai
 python-dotenv
 streamlit==1.35.0
-pdfminer.six==20220524
-unstructured==0.6.7
 llama-index-embeddings-azure-openai
 llama-index-llms-azure-openai 
-# Use CPU-only torch to reduce size
-torch==2.1.0+cpu --extra-index-url https://download.pytorch.org/whl/cpu
-sentence-transformers
-llama-index-retrievers-bm25
-llama-index-vector-stores-faiss
-faiss-cpu
 psutil==5.9.0
 azure-search-documents>=11.6.0b1
 llama-index-vector-stores-azureaisearch
+
