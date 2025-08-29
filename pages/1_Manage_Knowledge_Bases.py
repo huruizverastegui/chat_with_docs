@@ -303,8 +303,8 @@ def put_skillset_raw(*, skillset_name: str, index_name: str):
         "description": "Split document text into ~1k-token pages",
         "context": "/document",
         "textSplitMode": "pages",
-        "maximumPageLength": 1000,
-        "pageOverlapLength": 100,
+        "maximumPageLength": 512,
+        "pageOverlapLength": 120,
         "inputs": [{"name": "text", "source": "/document/content"}],
         "outputs": [{"name": "textItems", "targetName": "pages"}]
     }
@@ -410,7 +410,7 @@ def ensure_kb_index(container: str):
             name="default",
             prioritized_fields=SemanticPrioritizedFields(
                 title_field=SemanticField(field_name="title"),
-                prioritized_content_fields=[SemanticField(field_name="content")]
+                content_fields=[SemanticField(field_name="content")]
             )
         )]
     )
@@ -536,11 +536,6 @@ if password_input==password_unicef:
 
 
     if upload_confirm and uploaded_files:
-        # Show configuration info
-        with st.expander("Configuration Details", expanded=False):
-            st.caption(f"AOAI endpoint for skill: {AZURE_OPENAI_ENDPOINT}")
-            st.caption(f"Embedding deployment: {AZURE_EMBEDDING_DEPLOYMENT} (dims={EMBED_DIM})")
-            st.caption(f"Blob DS conn string starts with: {os.getenv('SEARCH_BLOB_CONNECTION_STRING','')[:30]}")
         
         # Upload files with progress
         upload_progress = st.progress(0)
