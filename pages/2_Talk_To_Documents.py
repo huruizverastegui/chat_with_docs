@@ -381,7 +381,7 @@ def search_azure_directly(container_name, query, top_k=5):
         logger.error(f"❌ Azure Search error: {str(e)}")
         return []
 
-def search_azure_with_document_filter(container_name, query, selected_documents, total_chunks=40, min_chunks_per_doc=5):
+def search_azure_with_document_filter(container_name, query, selected_documents, total_chunks=40, min_chunks_per_doc=5, mmr_enabled=True, mmr_lambda=0.5):
     """
     Search Azure AI Search with optimized multi-document retrieval strategy
     Makes a single API call with filter for all selected documents
@@ -491,11 +491,92 @@ def search_azure_with_document_filter(container_name, query, selected_documents,
             st.write(f"📄 **{doc_name}**: {len(doc_results)} chunks found")
         
         logger.info(f"✅ Optimized search complete: {len(final_results)} total chunks from {len(selected_documents)} documents")
+        
+        # Apply MMR for diversity if enabled and we have enough chunks
+        if mmr_enabled and len(final_results) > 10:
+            logger.info(f"🔄 Applying MMR for diversity improvement (λ={mmr_lambda})")
+            final_results = apply_mmr(final_results, query, target_count=len(final_results), lambda_param=mmr_lambda)
+        
         return final_results
         
     except Exception as e:
         logger.error(f"❌ Optimized search error: {str(e)}")
         return []
+
+def apply_mmr(chunks, query, target_count, lambda_param=0.5):
+    """
+    Apply Maximal Marginal Relevance (MMR) to select diverse chunks
+    """
+    if len(chunks) <= target_count:
+        return chunks
+    
+    # Sort chunks by relevance score (descending)
+    sorted_chunks = sorted(chunks, key=lambda x: x['score'], reverse=True)
+    
+    # Start with most relevant chunk
+    selected = [sorted_chunks[0]]
+    remaining = sorted_chunks[1:]
+    
+    logger.info(f"🔄 Applying MMR: {len(chunks)} chunks → {target_count} diverse chunks")
+    
+    while len(selected) < target_count and remaining:
+        best_mmr_score = -1
+        best_chunk = None
+        best_index = -1
+        
+        for i, chunk in enumerate(remaining):
+            # Relevance score (already normalized from search)
+            relevance = chunk['score']
+            
+            # Calculate max similarity to already selected chunks
+            max_similarity = 0
+            for selected_chunk in selected:
+                similarity = calculate_chunk_similarity(chunk, selected_chunk)
+                max_similarity = max(max_similarity, similarity)
+            
+            # Calculate MMR score
+            mmr_score = lambda_param * relevance - (1 - lambda_param) * max_similarity
+            
+            if mmr_score > best_mmr_score:
+                best_mmr_score = mmr_score
+                best_chunk = chunk
+                best_index = i
+        
+        # Add best chunk to selected
+        selected.append(best_chunk)
+        remaining.pop(best_index)
+    
+    logger.info(f"✅ MMR complete: Selected {len(selected)} diverse chunks")
+    return selected
+
+def calculate_chunk_similarity(chunk1, chunk2):
+    """
+    Calculate similarity between two chunks using content-based approach
+    """
+    try:
+        # Simple keyword-based similarity (faster than embeddings)
+        content1 = chunk1['content'].lower()
+        content2 = chunk2['content'].lower()
+        
+        # Extract words (simple tokenization)
+        words1 = set(content1.split())
+        words2 = set(content2.split())
+        
+        # Calculate Jaccard similarity
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+        
+        if union == 0:
+            return 0.0
+        
+        similarity = intersection / union
+        
+        # Normalize to 0-1 range and apply some smoothing
+        return min(similarity * 2, 1.0)  # Scale up similarity, cap at 1.0
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Error calculating chunk similarity: {str(e)}")
+        return 0.0
 
 def condense_question_with_context(current_query, chat_history, llm_model):
     """
@@ -717,6 +798,8 @@ if password_input==password_unicef:
 
 
 
+
+
     #QUERY OPTIMIZATION - TOP K
     # with st.sidebar:
     #     st.markdown("---")
@@ -900,7 +983,6 @@ if password_input==password_unicef:
                         # Debug: Show what we're searching
                         st.write(f"🔍 **Debug:** Searching {len(st.session_state.selected_documents)} documents: {list(st.session_state.selected_documents)}")
                         st.write(f"📊 **Total chunks to retrieve:** {total_chunks}")
-                        st.write(f"📊 **Minimum chunks per document:** 5")
                         
                         # Use multi-document search with selected documents
                         search_results = search_azure_with_document_filter(
@@ -908,7 +990,9 @@ if password_input==password_unicef:
                             condensed_query,  # Use condensed query for search
                             st.session_state.selected_documents,
                             total_chunks,
-                            min_chunks_per_doc=5  # Ensure minimum 5 chunks per document
+                            min_chunks_per_doc=5,  # Ensure minimum 5 chunks per document
+                            mmr_enabled=True,  # Always enable MMR
+                            mmr_lambda=0.5  # Fixed balanced setting
                         )
                         
                         if not search_results:
