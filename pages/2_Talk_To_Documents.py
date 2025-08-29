@@ -841,7 +841,7 @@ if password_input==password_unicef:
 
     # Document selection interface
     st.sidebar.markdown("---")
-    st.sidebar.subheader("📄 Select Documents to Search")
+    st.sidebar.subheader("📄 Select Documents to Search - No more than 10")
     
     blob_list = list_all_files(container_name)
     
@@ -874,17 +874,7 @@ if password_input==password_unicef:
         st.sidebar.info(f"📊 Minimum: 5 chunks per document")
     else:
         st.sidebar.warning("⚠️ No documents selected")
-    
-    # Quick selection buttons
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        if st.button("Select All", key="select_all"):
-            st.session_state.selected_documents = {doc["Name"] for doc in blob_list}
-            st.rerun()
-    with col2:
-        if st.button("Clear All", key="clear_all"):
-            st.session_state.selected_documents = set()
-            st.rerun()
+  
 
     # detect zero‐byte blobs
     blob_list_df=pd.DataFrame(blob_list)
