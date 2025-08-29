@@ -130,187 +130,187 @@ password_unicef =os.environ["APP_PASSWORD"]
 password_input = st.text_input("Enter a password", type="password")
 
 
-def analyze_query_complexity(query: str, total_documents: int = 0, total_files: int = 0) -> Tuple[str, int]:
-    """
-    Analyze query complexity and return complexity level with recommended similarity_top_k
+# def analyze_query_complexity(query: str, total_documents: int = 0, total_files: int = 0) -> Tuple[str, int]:
+#     """
+#     Analyze query complexity and return complexity level with recommended similarity_top_k
     
-    Args:
-        query: The user's query
-        total_documents: Total number of document chunks in the knowledge base
-        total_files: Total number of unique files in the knowledge base
+#     Args:
+#         query: The user's query
+#         total_documents: Total number of document chunks in the knowledge base
+#         total_files: Total number of unique files in the knowledge base
     
-    Returns:
-        Tuple of (complexity_level, recommended_top_k)
-    """
-    query = query.strip().lower()
-    query_length = len(query)
-    word_count = len(query.split())
+#     Returns:
+#         Tuple of (complexity_level, recommended_top_k)
+#     """
+#     query = query.strip().lower()
+#     query_length = len(query)
+#     word_count = len(query.split())
     
-    # Document corpus size multipliers for scaling top_k
-    def get_corpus_multiplier(docs: int, files: int) -> float:
-        """Calculate multiplier based on corpus size"""
-        if files <= 5:
-            return 0.7  # Small corpus, reduce top_k
-        elif files <= 15:
-            return 1.0  # Medium corpus, standard top_k
-        elif files <= 50:
-            return 1.3  # Large corpus, increase top_k
-        else:
-            return 1.6  # Very large corpus, significantly increase top_k
+#     # Document corpus size multipliers for scaling top_k
+#     def get_corpus_multiplier(docs: int, files: int) -> float:
+#         """Calculate multiplier based on corpus size"""
+#         if files <= 5:
+#             return 0.7  # Small corpus, reduce top_k
+#         elif files <= 15:
+#             return 1.0  # Medium corpus, standard top_k
+#         elif files <= 50:
+#             return 1.3  # Large corpus, increase top_k
+#         else:
+#             return 1.6  # Very large corpus, significantly increase top_k
     
-    corpus_multiplier = get_corpus_multiplier(total_documents, total_files)
+#     corpus_multiplier = get_corpus_multiplier(total_documents, total_files)
     
-    # Simple greetings and basic queries
-    simple_patterns = [
-        r'^(hi|hello|hey|good morning|good afternoon|good evening)$',
-        r'^(thanks?|thank you|ok|okay)$',
-        r'^(yes|no|sure|maybe)$',
-        r'^test$',
-        r'^\w{1,10}$'  # Single very short words
-    ]
+#     # Simple greetings and basic queries
+#     simple_patterns = [
+#         r'^(hi|hello|hey|good morning|good afternoon|good evening)$',
+#         r'^(thanks?|thank you|ok|okay)$',
+#         r'^(yes|no|sure|maybe)$',
+#         r'^test$',
+#         r'^\w{1,10}$'  # Single very short words
+#     ]
     
-    # Check if it's a simple greeting/response
-    if any(re.match(pattern, query) for pattern in simple_patterns):
-        base_top_k = 3
-        adjusted_top_k = max(3, int(base_top_k * corpus_multiplier))
-        return "simple", adjusted_top_k
+#     # Check if it's a simple greeting/response
+#     if any(re.match(pattern, query) for pattern in simple_patterns):
+#         base_top_k = 3
+#         adjusted_top_k = max(3, int(base_top_k * corpus_multiplier))
+#         return "simple", adjusted_top_k
     
-    # Short factual questions (usually need few sources, but scale with corpus)
-    if query_length < 50 and word_count <= 8:
-        # Look for question words that suggest simple factual queries
-        simple_question_words = ['what', 'when', 'where', 'who', 'which', 'how many']
-        if any(word in query for word in simple_question_words):
-            base_top_k = 5
-            adjusted_top_k = max(5, int(base_top_k * corpus_multiplier))
-            return "short_factual", adjusted_top_k
+#     # Short factual questions (usually need few sources, but scale with corpus)
+#     if query_length < 50 and word_count <= 8:
+#         # Look for question words that suggest simple factual queries
+#         simple_question_words = ['what', 'when', 'where', 'who', 'which', 'how many']
+#         if any(word in query for word in simple_question_words):
+#             base_top_k = 5
+#             adjusted_top_k = max(5, int(base_top_k * corpus_multiplier))
+#             return "short_factual", adjusted_top_k
         
-        base_top_k = 5
-        adjusted_top_k = max(5, int(base_top_k * corpus_multiplier))
-        return "short", adjusted_top_k
+#         base_top_k = 5
+#         adjusted_top_k = max(5, int(base_top_k * corpus_multiplier))
+#         return "short", adjusted_top_k
     
-    # Cross-document analysis indicators (these REALLY need more chunks with large corpus)
-    cross_doc_keywords = [
-        'across documents', 'all documents', 'compare documents', 'between documents',
-        'in each document', 'document by document', 'comprehensive', 'overall',
-        'summarize everything', 'all files', 'entire knowledge base'
-    ]
+#     # Cross-document analysis indicators (these REALLY need more chunks with large corpus)
+#     cross_doc_keywords = [
+#         'across documents', 'all documents', 'compare documents', 'between documents',
+#         'in each document', 'document by document', 'comprehensive', 'overall',
+#         'summarize everything', 'all files', 'entire knowledge base'
+#     ]
     
-    # Complex analysis requests
-    analysis_keywords = [
-        'analyze', 'compare', 'contrast', 'evaluate', 'summarize', 'summary',
-        'trends', 'patterns', 'detailed analysis', 'in-depth', 'thorough'
-    ]
+#     # Complex analysis requests
+#     analysis_keywords = [
+#         'analyze', 'compare', 'contrast', 'evaluate', 'summarize', 'summary',
+#         'trends', 'patterns', 'detailed analysis', 'in-depth', 'thorough'
+#     ]
     
-    has_cross_doc = any(keyword in query for keyword in cross_doc_keywords)
-    has_analysis = any(keyword in query for keyword in analysis_keywords)
+#     has_cross_doc = any(keyword in query for keyword in cross_doc_keywords)
+#     has_analysis = any(keyword in query for keyword in analysis_keywords)
     
-    if has_cross_doc or (has_analysis and total_files > 10):
-        # Cross-document queries need significantly more chunks
-        base_top_k = 18
-        # Extra multiplier for cross-document queries
-        cross_doc_multiplier = corpus_multiplier * 1.4
-        adjusted_top_k = max(12, min(25, int(base_top_k * cross_doc_multiplier)))
-        return "cross_document", adjusted_top_k
-    elif has_analysis:
-        base_top_k = 12
-        adjusted_top_k = max(8, int(base_top_k * corpus_multiplier))
-        return "complex", adjusted_top_k
+#     if has_cross_doc or (has_analysis and total_files > 10):
+#         # Cross-document queries need significantly more chunks
+#         base_top_k = 18
+#         # Extra multiplier for cross-document queries
+#         cross_doc_multiplier = corpus_multiplier * 1.4
+#         adjusted_top_k = max(12, min(25, int(base_top_k * cross_doc_multiplier)))
+#         return "cross_document", adjusted_top_k
+#     elif has_analysis:
+#         base_top_k = 12
+#         adjusted_top_k = max(8, int(base_top_k * corpus_multiplier))
+#         return "complex", adjusted_top_k
     
-    # Medium complexity - typical questions
-    elif query_length < 150 and word_count <= 25:
-        base_top_k = 8
-        adjusted_top_k = max(6, int(base_top_k * corpus_multiplier))
-        return "medium", adjusted_top_k
+#     # Medium complexity - typical questions
+#     elif query_length < 150 and word_count <= 25:
+#         base_top_k = 8
+#         adjusted_top_k = max(6, int(base_top_k * corpus_multiplier))
+#         return "medium", adjusted_top_k
     
-    # Very long or comprehensive requests
-    elif query_length > 200 or word_count > 35:
-        base_top_k = 15
-        adjusted_top_k = max(10, int(base_top_k * corpus_multiplier))
-        return "comprehensive", adjusted_top_k
+#     # Very long or comprehensive requests
+#     elif query_length > 200 or word_count > 35:
+#         base_top_k = 15
+#         adjusted_top_k = max(10, int(base_top_k * corpus_multiplier))
+#         return "comprehensive", adjusted_top_k
     
-    # Default medium complexity
-    base_top_k = 8
-    adjusted_top_k = max(6, int(base_top_k * corpus_multiplier))
-    return "medium", adjusted_top_k
+#     # Default medium complexity
+#     base_top_k = 8
+#     adjusted_top_k = max(6, int(base_top_k * corpus_multiplier))
+#     return "medium", adjusted_top_k
 
 
-def optimize_similarity_top_k(query: str, default_top_k: int, knowledge_docs=None, logger=None) -> int:
-    """
-    Dynamically adjust similarity_top_k based on query analysis and content volume
+# def optimize_similarity_top_k(query: str, default_top_k: int, knowledge_docs=None, logger=None) -> int:
+#     """
+#     Dynamically adjust similarity_top_k based on query analysis and content volume
     
-    Args:
-        query: The user's query
-        default_top_k: The default similarity_top_k from session state
-        knowledge_docs: List of documents to analyze content volume (optional)
-        logger: Logger instance for detailed logging (optional)
+#     Args:
+#         query: The user's query
+#         default_top_k: The default similarity_top_k from session state
+#         knowledge_docs: List of documents to analyze content volume (optional)
+#         logger: Logger instance for detailed logging (optional)
         
-    Returns:
-        Optimized similarity_top_k value
-    """
-    # Get content statistics
-    if knowledge_docs:
-        total_chunks = len(knowledge_docs)
-        total_content_length = sum(len(doc.text) if hasattr(doc, 'text') and doc.text else 0 
-                                 for doc in knowledge_docs)
+#     Returns:
+#         Optimized similarity_top_k value
+#     """
+#     # Get content statistics
+#     if knowledge_docs:
+#         total_chunks = len(knowledge_docs)
+#         total_content_length = sum(len(doc.text) if hasattr(doc, 'text') and doc.text else 0 
+#                                  for doc in knowledge_docs)
         
-        # Get unique file count for additional context
-        unique_files = len(set(doc.metadata.get('file_name', 'unknown') 
-                             for doc in knowledge_docs))
-    else:
-        total_chunks = 0
-        unique_files = 0
+#         # Get unique file count for additional context
+#         unique_files = len(set(doc.metadata.get('file_name', 'unknown') 
+#                              for doc in knowledge_docs))
+#     else:
+#         total_chunks = 0
+#         unique_files = 0
     
-    complexity, recommended_top_k = analyze_query_complexity(
-        query, total_chunks, unique_files
-    )
+#     complexity, recommended_top_k = analyze_query_complexity(
+#         query, total_chunks, unique_files
+#     )
     
-    # Enhanced logging with content volume metrics if logger provided
-    if logger:
-        content_mb = (sum(len(doc.text) if hasattr(doc, 'text') and doc.text else 0 
-                         for doc in knowledge_docs) / (1024 * 1024)) if knowledge_docs else 0
-        logger.info(f"🔍 QUERY ANALYSIS: '{query[:50]}...'")
-        logger.info(f"   Complexity: {complexity}")
-        logger.info(f"   Content Volume: {total_chunks} chunks, {content_mb:.1f}MB total")
-        logger.info(f"   Files: {unique_files}")
-        logger.info(f"   Recommended top_k: {recommended_top_k} (user default: {default_top_k})")
+#     # Enhanced logging with content volume metrics if logger provided
+#     if logger:
+#         content_mb = (sum(len(doc.text) if hasattr(doc, 'text') and doc.text else 0 
+#                          for doc in knowledge_docs) / (1024 * 1024)) if knowledge_docs else 0
+#         logger.info(f"🔍 QUERY ANALYSIS: '{query[:50]}...'")
+#         logger.info(f"   Complexity: {complexity}")
+#         logger.info(f"   Content Volume: {total_chunks} chunks, {content_mb:.1f}MB total")
+#         logger.info(f"   Files: {unique_files}")
+#         logger.info(f"   Recommended top_k: {recommended_top_k} (user default: {default_top_k})")
     
-    # Decision logic: balance user preference with content-aware optimization
-    if complexity in ["simple"]:
-        # For simple queries, prioritize speed even with large corpus
-        optimized_top_k = min(recommended_top_k, default_top_k)
-    elif complexity in ["short", "short_factual"]:
-        # For short factual queries, respect content scaling but don't go overboard
-        if default_top_k < recommended_top_k * 0.7:
-            optimized_top_k = default_top_k  # User really wants minimal chunks
-        else:
-            optimized_top_k = recommended_top_k
-    elif complexity in ["cross_document", "comprehensive"]:
-        # For cross-document queries, may need more than user default for quality
-        optimized_top_k = max(recommended_top_k, default_top_k)
-    else:
-        # For medium/complex, balance optimization with user preference
-        if default_top_k < (recommended_top_k * 0.6):  # User wants much fewer
-            optimized_top_k = max(default_top_k, int(recommended_top_k * 0.7))  # Compromise
-        else:
-            optimized_top_k = recommended_top_k
+#     # Decision logic: balance user preference with content-aware optimization
+#     if complexity in ["simple"]:
+#         # For simple queries, prioritize speed even with large corpus
+#         optimized_top_k = min(recommended_top_k, default_top_k)
+#     elif complexity in ["short", "short_factual"]:
+#         # For short factual queries, respect content scaling but don't go overboard
+#         if default_top_k < recommended_top_k * 0.7:
+#             optimized_top_k = default_top_k  # User really wants minimal chunks
+#         else:
+#             optimized_top_k = recommended_top_k
+#     elif complexity in ["cross_document", "comprehensive"]:
+#         # For cross-document queries, may need more than user default for quality
+#         optimized_top_k = max(recommended_top_k, default_top_k)
+#     else:
+#         # For medium/complex, balance optimization with user preference
+#         if default_top_k < (recommended_top_k * 0.6):  # User wants much fewer
+#             optimized_top_k = max(default_top_k, int(recommended_top_k * 0.7))  # Compromise
+#         else:
+#             optimized_top_k = recommended_top_k
     
-    # Ensure we don't exceed reasonable bounds
-    optimized_top_k = max(3, min(25, optimized_top_k))
+#     # Ensure we don't exceed reasonable bounds
+#     optimized_top_k = max(3, min(25, optimized_top_k))
     
-    if logger and optimized_top_k != default_top_k:
-        direction = "↗️ Increased" if optimized_top_k > default_top_k else "📉 Reduced"
-        percentage_change = ((optimized_top_k - default_top_k) / default_top_k) * 100
-        logger.info(f"{direction} similarity_top_k from {default_top_k} to {optimized_top_k} ({percentage_change:+.0f}%)")
+#     if logger and optimized_top_k != default_top_k:
+#         direction = "↗️ Increased" if optimized_top_k > default_top_k else "📉 Reduced"
+#         percentage_change = ((optimized_top_k - default_top_k) / default_top_k) * 100
+#         logger.info(f"{direction} similarity_top_k from {default_top_k} to {optimized_top_k} ({percentage_change:+.0f}%)")
         
-        # Explain the reasoning
-        if complexity == "cross_document":
-            logger.info(f"   Reason: Cross-document query needs broad coverage across {unique_files} files")
-        elif complexity == "simple" and optimized_top_k < default_top_k:
-            logger.info(f"   Reason: Simple query - prioritizing speed over exhaustive search")
-        elif total_chunks > 200:
-            logger.info(f"   Reason: Large corpus ({total_chunks} chunks) - scaling for better coverage")
+#         # Explain the reasoning
+#         if complexity == "cross_document":
+#             logger.info(f"   Reason: Cross-document query needs broad coverage across {unique_files} files")
+#         elif complexity == "simple" and optimized_top_k < default_top_k:
+#             logger.info(f"   Reason: Simple query - prioritizing speed over exhaustive search")
+#         elif total_chunks > 200:
+#             logger.info(f"   Reason: Large corpus ({total_chunks} chunks) - scaling for better coverage")
     
-    return optimized_top_k
+#     return optimized_top_k
 
 
 def get_azure_openai_deployment_name(model_name):
@@ -379,6 +379,88 @@ def search_azure_directly(container_name, query, top_k=5):
         
     except Exception as e:
         logger.error(f"❌ Azure Search error: {str(e)}")
+        return []
+
+def search_azure_with_document_filter(container_name, query, selected_documents, total_chunks=40):
+    """
+    Search Azure AI Search with optimized multi-document retrieval strategy
+    Makes a single API call with filter for all selected documents
+    """
+    try:
+        # Azure Search setup
+        search_endpoint = os.environ.get("SEARCH_ENDPOINT")
+        search_admin_key = os.environ.get("SEARCH_ADMIN_KEY")
+        index_name = f"kb-{container_name.lower().replace('_', '-')}"
+        
+        logger.info(f"🔍 Optimized multi-document search: {len(selected_documents)} documents, {total_chunks} total chunks")
+        
+        # Create search client
+        search_client = SearchClient(
+            search_endpoint, 
+            index_name, 
+            AzureKeyCredential(search_admin_key)
+        )
+        
+        # Create vector query for all selected documents
+        vector_query = VectorizableTextQuery(
+            text=query,
+            k_nearest_neighbors=total_chunks,
+            fields="contentVector"
+        )
+        
+        # Build filter for all selected documents
+        if len(selected_documents) == 1:
+            # Single document filter
+            doc_filter = f"title eq '{list(selected_documents)[0]}'"
+        else:
+            # Multiple documents filter using 'or'
+            doc_filters = [f"title eq '{doc}'" for doc in selected_documents]
+            doc_filter = " or ".join(doc_filters)
+        
+        # Single search call for all selected documents
+        results = search_client.search(
+            search_text=query,
+            vector_queries=[vector_query],
+            hybrid_search=HybridSearch(),
+            filter=doc_filter,
+            top=total_chunks,
+            include_total_count=True
+        )
+        
+        # Extract all results
+        all_results = []
+        for result in results:
+            all_results.append({
+                'content': result.get('content', ''),
+                'title': result.get('title', ''),
+                'filepath': result.get('filepath', ''),
+                'score': result.get('@search.score', 0)
+            })
+        
+        # Group results by document for analysis
+        results_by_doc = {}
+        for result in all_results:
+            doc_name = result['title']
+            if doc_name not in results_by_doc:
+                results_by_doc[doc_name] = []
+            results_by_doc[doc_name].append(result)
+        
+        # Log results by document
+        for doc_name, doc_results in results_by_doc.items():
+            logger.info(f"📄 {doc_name}: {len(doc_results)} chunks found")
+            st.write(f"📄 **{doc_name}**: {len(doc_results)} chunks found")
+        
+        # Show documents with no results
+        docs_with_no_results = selected_documents - set(results_by_doc.keys())
+        for doc_name in docs_with_no_results:
+            logger.info(f"📄 {doc_name}: No relevant chunks found")
+            st.write(f"📄 **{doc_name}**: No relevant chunks found")
+        
+        logger.info(f"✅ Optimized search complete: {len(all_results)} total chunks from {len(results_by_doc)} documents")
+        return all_results
+        
+    except Exception as e:
+        logger.error(f"❌ Optimized search error: {str(e)}")
         return []
 
 def condense_question_with_context(current_query, chat_history, llm_model):
@@ -543,21 +625,22 @@ if "data_loaded" not in st.session_state:
 if "current_warnings" not in st.session_state:
     st.session_state.current_warnings = []
 if "similarity_top_k" not in st.session_state:
-    st.session_state.similarity_top_k = 7
+    st.session_state.similarity_top_k = 40
 if "use_query_optimization" not in st.session_state:
     st.session_state.use_query_optimization = False
+if "selected_documents" not in st.session_state:
+    st.session_state.selected_documents = set()
 if "system_prompt" not in st.session_state:
     st.session_state.system_prompt = """System prompt:
-You are an expert research assistant. You are assisting a literature review for a formative evaluation of UNICEF East Asia Pacific’s adolescent girls–focused programming for the period of 2022–2025. Your task is to review documents in this knowledge base and extract content to answer specific questions.
+You are an expert research assistant. You are assisting a literature review for a formative evaluation of UNICEF East Asia Pacific’s adolescent girls–focused programming for the period of 2022–2025. Your task is to review documents in this knowledge base and extract verbatim excerpts or exact text to answer specific questions.
+ When answering a question:
+1. COMPREHENSIVENESS: Always search across ALL documents in the knowledge base and extract information from each of them individually. You must extract responses from each document for each question. 
+2. STRUCTURED RESPONSES: Copy exact information from the documents to answer the question. Organize answers in short excerpts or bullet points of the text.
+3. CITATIONS: Add a simple reference to each extraction using the format [file name - year (if applicable)]. If the same point appears in multiple documents, list it once and append all references at the end. DO NOT INCLUDE THE PAGE
+4. DETAIL LEVEL: Only extract what answers the question. Provide evidence (such as data/results, programs/partners, implementation details, dates/locations), or context that is tied to the question where it is present. 
+5. EXCLUSION: Exclude general background or information that does not connect to the question at all. Do not: interpret, analyse, infer, or add any external information.
 
-When answering a question:
-    1. COMPREHENSIVENESS: Always search across and within ALL documents in the knowledge base and provide information from each of them. 
-    2. STRUCTURED RESPONSES: Copy exact information from the documents or tightly paraphrase to answer the question. Organize answers in short excerpts, or bullet points.
-    3. CROSS-REFERENCING: Identify connections and patterns across different documents. Present both specific findings from each document and key themes or patterns across documents.
-    4. CITATIONS: Add a simple reference to each extraction using the format [file name - page - year (if applicable)]. If the same point appears in multiple documents, list it once and append all references at the end.
-    5. DETAIL LEVEL: Only extract what directly answers the question. Provide evidence (such as data/results, programs/partners, implementation details, dates/locations), or context that is explicitly tied to the question where possible.
-    6. EXCLUSION: Exclude any general background or information that does not connect to the question. Do not: interpret, analyse, infer, or add external information. 
-"""
+   """
 
 if password_input==password_unicef:
     azure_storage_account_name = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
@@ -591,12 +674,14 @@ if password_input==password_unicef:
     st.sidebar.error("1️⃣ Select your knowledge base and model")
     container_name = st.sidebar.selectbox("Knowledge base choice: ", container_list)
     model_variable = st.sidebar.selectbox("Model choice: ", ["o4-mini","gpt-4","gpt-4o","llama-4-Scout"])
+    deep_research = st.sidebar.checkbox(
+    "🔎 Deep Research",
+    value=False,
+    key="deep_research",
+    help="Enable it when going through many or heavy documents"
+)
 
 
-
-
-
-    
 
     #QUERY OPTIMIZATION - TOP K
     # with st.sidebar:
@@ -637,10 +722,61 @@ if password_input==password_unicef:
         azure_api_base = os.environ["URL_AZURE_LLAMA4_SCOUT"]
         azure_api_key = os.environ["KEY_AZURE_LLAMA4_SCOUT"]
 
-    st.sidebar.write("Using these documents:")
+    # Document selection interface
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📄 Select Documents to Search")
+    
     blob_list = list_all_files(container_name)
-    blob_list_df=pd.DataFrame(blob_list)
-    st.sidebar.dataframe(blob_list_df["Name"], use_container_width=True)
+    
+    # Initialize selected documents if container changed or first time
+    if (st.session_state.current_container != container_name or 
+        not st.session_state.selected_documents):
+        # Select all documents by default
+        st.session_state.selected_documents = {doc["Name"] for doc in blob_list}
+    
+    # Document selection checkboxes
+    selected_docs = []
+    for doc in blob_list:
+        doc_name = doc["Name"]
+        is_selected = st.sidebar.checkbox(
+            doc_name,
+            value=doc_name in st.session_state.selected_documents,
+            key=f"doc_{doc_name}"
+        )
+        if is_selected:
+            selected_docs.append(doc_name)
+    
+    # Update session state with current selection
+    st.session_state.selected_documents = set(selected_docs)
+    
+    # Show selection summary
+    if selected_docs:
+        chunks_per_doc = 70 // len(selected_docs) if deep_research else 40 // len(selected_docs)
+        st.sidebar.success(f"✅ {len(selected_docs)} document(s) selected")
+        st.sidebar.info(f"📊 ~{chunks_per_doc} chunks per document")
+    else:
+        st.sidebar.warning("⚠️ No documents selected")
+    
+    # Quick selection buttons
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("Select All", key="select_all"):
+            st.session_state.selected_documents = {doc["Name"] for doc in blob_list}
+            st.rerun()
+    with col2:
+        if st.button("Clear All", key="clear_all"):
+            st.session_state.selected_documents = set()
+            st.rerun()
+    
+    # Debug: Show selected documents
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🐛 Debug Info")
+    st.sidebar.write("**Selected documents:**")
+    if st.session_state.selected_documents:
+        for doc in sorted(st.session_state.selected_documents):
+            st.sidebar.write(f"• {doc}")
+    else:
+        st.sidebar.write("No documents selected")
 
     # detect zero‐byte blobs
     blob_list_df=pd.DataFrame(blob_list)
@@ -665,7 +801,7 @@ if password_input==password_unicef:
             system_prompt = st.text_area(
                 "System Prompt - Define how the AI should behave and respond to queries",
                 value=st.session_state.system_prompt,
-                height=250,
+                height=300,
                 key="system_prompt_input"
                 
             )
@@ -687,45 +823,11 @@ if password_input==password_unicef:
         • "Provide detailed explanations with examples" for comprehensive responses
         • "Focus on financial implications" for business documents""")
 
-        # Similarity Top K configuration
-        col3, col4 = st.columns([0.95, 0.05])
-        with col3:
-            similarity_top_k = st.slider(
-                "Similarity Top K - Number of most relevant document chunks to retrieve for each query",
-                min_value=5,
-                max_value=25,
-                value=st.session_state.similarity_top_k,
-                step=5,
-                key="similarity_top_k_input"
-                
-            )
-            st.session_state.similarity_top_k = similarity_top_k
-        with col4:
-            st.markdown(" ", help="""**What is Similarity Top K?**
-
-            This parameter controls how many of the most relevant document chunks are retrieved to answer your question.
-
-            **Low values (5-15):**
-            • Faster responses
-            • More focused answers
-            • Good for specific, targeted questions
-            • May miss some relevant information
-
-            **Medium values (15-35):**
-            • Balanced approach
-            • Good for most use cases
-            • Comprehensive without being overwhelming
-
-            **High values (35-75):**
-            • Most comprehensive answers
-            • Better for complex questions requiring broad context
-            • Slower responses
-            • May include some less relevant information
-            • Best for summary requests across multiple documents""")
-
         # Set data_loaded to True when we have container and model
         if container_name and model_variable:
             st.session_state.data_loaded = True
+            st.session_state.current_container = container_name
+            st.session_state.current_model = model_variable
             st.success("✅ Ready to search existing Azure index!")
 
 
@@ -765,12 +867,21 @@ if password_input==password_unicef:
                                 st.write(f"**Original:** {prompt}")
                                 st.write(f"**Condensed:** {condensed_query}")
                     
-                    # Step 2: Search Azure with condensed query
-                    with st.spinner("🔍 Searching documents..."):
-                        search_results = search_azure_directly(
+                    # Step 2: Search Azure with multi-document strategy
+                    with st.spinner("🔍 Searching selected documents..."):
+                        # Calculate total chunks based on deep research setting
+                        total_chunks = 70 if deep_research else 40
+                        
+                        # Debug: Show what we're searching
+                        st.write(f"🔍 **Debug:** Searching {len(st.session_state.selected_documents)} documents: {list(st.session_state.selected_documents)}")
+                        st.write(f"📊 **Total chunks to retrieve:** {total_chunks}")
+                        
+                        # Use multi-document search with selected documents
+                        search_results = search_azure_with_document_filter(
                             container_name, 
                             condensed_query,  # Use condensed query for search
-                            st.session_state.similarity_top_k
+                            st.session_state.selected_documents,
+                            total_chunks
                         )
                         
                         if not search_results:
@@ -779,7 +890,8 @@ if password_input==password_unicef:
                             st.session_state.messages.append({"role": "assistant", "content": response_text})
                         else:
                             # Show search results info
-                            st.info(f"Finished searching the knowledge base and retrieved the {len(search_results)} most relevant document chunks")
+                            docs_consulted = len(set(result['title'] for result in search_results))
+                            st.info(f"🔍 Searched {len(st.session_state.selected_documents)} selected documents • Retrieved {len(search_results)} chunks from {docs_consulted} documents")
                             
                             # Step 3: Generate response with both document context and chat history
                             with st.spinner("🤖 Generating response..."):
