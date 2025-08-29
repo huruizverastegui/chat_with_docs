@@ -740,7 +740,7 @@ if "data_loaded" not in st.session_state:
 if "current_warnings" not in st.session_state:
     st.session_state.current_warnings = []
 if "similarity_top_k" not in st.session_state:
-    st.session_state.similarity_top_k = 40
+    st.session_state.similarity_top_k = 50
 if "use_query_optimization" not in st.session_state:
     st.session_state.use_query_optimization = False
 if "selected_documents" not in st.session_state:
@@ -868,7 +868,7 @@ if password_input==password_unicef:
     
     # Show selection summary
     if selected_docs:
-        chunks_per_doc = 70 // len(selected_docs) if deep_research else 40 // len(selected_docs)
+        chunks_per_doc = 80 // len(selected_docs) if deep_research else 50 // len(selected_docs)
         st.sidebar.success(f"✅ {len(selected_docs)} document(s) selected")
         st.sidebar.info(f"📊 ~{chunks_per_doc} chunks per document")
         st.sidebar.info(f"📊 Minimum: 5 chunks per document")
