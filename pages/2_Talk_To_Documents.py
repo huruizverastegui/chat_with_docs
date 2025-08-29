@@ -381,10 +381,11 @@ def search_azure_directly(container_name, query, top_k=5):
         logger.error(f"❌ Azure Search error: {str(e)}")
         return []
 
-def search_azure_with_document_filter(container_name, query, selected_documents, total_chunks=40):
+def search_azure_with_document_filter(container_name, query, selected_documents, total_chunks=40, min_chunks_per_doc=5):
     """
     Search Azure AI Search with optimized multi-document retrieval strategy
     Makes a single API call with filter for all selected documents
+    Enforces minimum chunks per document
     """
     try:
         # Azure Search setup
@@ -392,7 +393,7 @@ def search_azure_with_document_filter(container_name, query, selected_documents,
         search_admin_key = os.environ.get("SEARCH_ADMIN_KEY")
         index_name = f"kb-{container_name.lower().replace('_', '-')}"
         
-        logger.info(f"🔍 Optimized multi-document search: {len(selected_documents)} documents, {total_chunks} total chunks")
+        logger.info(f"🔍 Optimized multi-document search: {len(selected_documents)} documents, {total_chunks} total chunks, min {min_chunks_per_doc} per doc")
         
         # Create search client
         search_client = SearchClient(
@@ -401,10 +402,13 @@ def search_azure_with_document_filter(container_name, query, selected_documents,
             AzureKeyCredential(search_admin_key)
         )
         
+        # Calculate required chunks to ensure minimum per document
+        required_chunks = max(total_chunks, len(selected_documents) * min_chunks_per_doc)
+        
         # Create vector query for all selected documents
         vector_query = VectorizableTextQuery(
             text=query,
-            k_nearest_neighbors=total_chunks,
+            k_nearest_neighbors=required_chunks,
             fields="contentVector"
         )
         
@@ -423,7 +427,7 @@ def search_azure_with_document_filter(container_name, query, selected_documents,
             vector_queries=[vector_query],
             hybrid_search=HybridSearch(),
             filter=doc_filter,
-            top=total_chunks,
+            top=required_chunks,
             include_total_count=True
         )
         
@@ -445,19 +449,49 @@ def search_azure_with_document_filter(container_name, query, selected_documents,
                 results_by_doc[doc_name] = []
             results_by_doc[doc_name].append(result)
         
-        # Log results by document
-        for doc_name, doc_results in results_by_doc.items():
-            logger.info(f"📄 {doc_name}: {len(doc_results)} chunks found")
+        # Check for documents with insufficient chunks and fetch more if needed
+        final_results = []
+        for doc_name in selected_documents:
+            doc_results = results_by_doc.get(doc_name, [])
+            
+            if len(doc_results) < min_chunks_per_doc:
+                # Fetch additional chunks for this document to meet minimum
+                logger.info(f"📄 {doc_name}: Only {len(doc_results)} chunks, fetching more to meet minimum {min_chunks_per_doc}")
+                st.write(f"📄 **{doc_name}**: Only {len(doc_results)} chunks, fetching more...")
+                
+                additional_chunks_needed = min_chunks_per_doc - len(doc_results)
+                additional_results = search_client.search(
+                    search_text=query,
+                    vector_queries=[VectorizableTextQuery(
+                        text=query,
+                        k_nearest_neighbors=additional_chunks_needed,
+                        fields="contentVector"
+                    )],
+                    hybrid_search=HybridSearch(),
+                    filter=f"title eq '{doc_name}'",
+                    top=additional_chunks_needed,
+                    include_total_count=True
+                )
+                
+                # Add additional chunks
+                for result in additional_results:
+                    if result.get('title') == doc_name:
+                        doc_results.append({
+                            'content': result.get('content', ''),
+                            'title': result.get('title', ''),
+                            'filepath': result.get('filepath', ''),
+                            'score': result.get('@search.score', 0)
+                        })
+            
+            # Add all chunks for this document to final results
+            final_results.extend(doc_results)
+            
+            # Log final count for this document
+            logger.info(f"📄 {doc_name}: {len(doc_results)} chunks (minimum {min_chunks_per_doc} enforced)")
             st.write(f"📄 **{doc_name}**: {len(doc_results)} chunks found")
         
-        # Show documents with no results
-        docs_with_no_results = selected_documents - set(results_by_doc.keys())
-        for doc_name in docs_with_no_results:
-            logger.info(f"📄 {doc_name}: No relevant chunks found")
-            st.write(f"📄 **{doc_name}**: No relevant chunks found")
-        
-        logger.info(f"✅ Optimized search complete: {len(all_results)} total chunks from {len(results_by_doc)} documents")
-        return all_results
+        logger.info(f"✅ Optimized search complete: {len(final_results)} total chunks from {len(selected_documents)} documents")
+        return final_results
         
     except Exception as e:
         logger.error(f"❌ Optimized search error: {str(e)}")
@@ -754,6 +788,7 @@ if password_input==password_unicef:
         chunks_per_doc = 70 // len(selected_docs) if deep_research else 40 // len(selected_docs)
         st.sidebar.success(f"✅ {len(selected_docs)} document(s) selected")
         st.sidebar.info(f"📊 ~{chunks_per_doc} chunks per document")
+        st.sidebar.info(f"📊 Minimum: 5 chunks per document")
     else:
         st.sidebar.warning("⚠️ No documents selected")
     
@@ -767,16 +802,6 @@ if password_input==password_unicef:
         if st.button("Clear All", key="clear_all"):
             st.session_state.selected_documents = set()
             st.rerun()
-    
-    # Debug: Show selected documents
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🐛 Debug Info")
-    st.sidebar.write("**Selected documents:**")
-    if st.session_state.selected_documents:
-        for doc in sorted(st.session_state.selected_documents):
-            st.sidebar.write(f"• {doc}")
-    else:
-        st.sidebar.write("No documents selected")
 
     # detect zero‐byte blobs
     blob_list_df=pd.DataFrame(blob_list)
@@ -875,13 +900,15 @@ if password_input==password_unicef:
                         # Debug: Show what we're searching
                         st.write(f"🔍 **Debug:** Searching {len(st.session_state.selected_documents)} documents: {list(st.session_state.selected_documents)}")
                         st.write(f"📊 **Total chunks to retrieve:** {total_chunks}")
+                        st.write(f"📊 **Minimum chunks per document:** 5")
                         
                         # Use multi-document search with selected documents
                         search_results = search_azure_with_document_filter(
                             container_name, 
                             condensed_query,  # Use condensed query for search
                             st.session_state.selected_documents,
-                            total_chunks
+                            total_chunks,
+                            min_chunks_per_doc=5  # Ensure minimum 5 chunks per document
                         )
                         
                         if not search_results:
