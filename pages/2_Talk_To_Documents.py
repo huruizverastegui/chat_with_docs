@@ -754,7 +754,13 @@ When answering a question:
 3. CITATIONS: Add a simple reference to each extraction using the format [file name - year (if applicable)]. If the same point appears in multiple selected documents, list it once and append all references at the end. DO NOT INCLUDE THE PAGE
 4. DETAIL LEVEL: Only extract what answers the question. Provide evidence (such as data/results, programs/partners, implementation details, dates/locations), or context that is tied to the question where it is present. 
 5. EXCLUSION: Exclude general background or information that does not connect to the question at all. Do not: interpret, analyse, infer, or add any external information.
-   """
+
+The documents in this knowledge base contain some commonly used abbreviations and some specific acronyms related to this assignment. You MUST extract text to answer evaluation questions along with acronyms, where applicable. Do NOT leave out any excerpts if you do not understand the acronyms, simply extract as it is. 
+Commonly used acronym types and list to look out for (including but not limited to): 
+Population sub-groups: AG = adolescent girls, AB = adolescent boys, and others such as HW, YP…
+UNICEF areas of work: CP = child protection, ALS = alternate learning systems, and others such as OOS, CSE, SP, VAC, VAW, GBV, CEFMU, CM, SBC, MHM, NFE, ECCD, GE, GR…
+Offices, Departments and Other Occupational Units: CO = Country Office, FP = focal point, DoE = Department of Education and others such as RO, DoH, MoH, NAP, RHU, LGU, GAWG, IP…
+  """
 
 if password_input==password_unicef:
     azure_storage_account_name = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
