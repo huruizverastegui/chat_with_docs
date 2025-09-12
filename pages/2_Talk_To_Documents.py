@@ -58,6 +58,7 @@ import logging
 
 import re
 from typing import Tuple, Optional, List, Dict
+from pathlib import Path
 
 class PerformanceLogger:
     def __init__(self, logger):
@@ -339,7 +340,8 @@ def search_azure_directly(container_name, query, top_k=5):
         search_admin_key = os.environ.get("SEARCH_ADMIN_KEY")
         index_name = f"kb-{container_name.lower().replace('_', '-')}"
         
-        logger.info(f"🔍 Searching Azure index: {index_name}")
+        logger.info(f"🔍 Searching Azure index: {index_name} with semantic ranking enabled")
+        logger.info(f"📊 Search parameters: semantic_query='{query[:50]}...', semantic_config='default', hybrid_search=True")
         
         # Create search client
         search_client = SearchClient(
@@ -355,11 +357,14 @@ def search_azure_directly(container_name, query, top_k=5):
             fields="contentVector"  # Your vector field name in Azure Search
         )
         
-        # Search with hybrid approach (vector + keyword)
+        # Search with hybrid approach (vector + keyword) + semantic ranking
         results = search_client.search(
             search_text=query,
             vector_queries=[vector_query],
             hybrid_search=HybridSearch(),
+            semantic_query=query,
+            semantic_configuration_name="default",
+            query_language="en-us",
             top=top_k,
             include_total_count=True
         )
@@ -381,7 +386,7 @@ def search_azure_directly(container_name, query, top_k=5):
         logger.error(f"❌ Azure Search error: {str(e)}")
         return []
 
-def search_azure_with_document_filter(container_name, query, selected_documents, total_chunks=40, min_chunks_per_doc=5, mmr_enabled=True, mmr_lambda=0.5):
+def search_azure_with_document_filter(container_name, query, selected_documents, total_chunks=70, min_chunks_per_doc=5, mmr_enabled=False, mmr_lambda=0.5):
     """
     Search Azure AI Search with optimized multi-document retrieval strategy
     Makes a single API call with filter for all selected documents
@@ -393,7 +398,7 @@ def search_azure_with_document_filter(container_name, query, selected_documents,
         search_admin_key = os.environ.get("SEARCH_ADMIN_KEY")
         index_name = f"kb-{container_name.lower().replace('_', '-')}"
         
-        logger.info(f"🔍 Optimized multi-document search: {len(selected_documents)} documents, {total_chunks} total chunks, min {min_chunks_per_doc} per doc")
+        logger.info(f"🔍 Optimized multi-document search with semantic ranking: {len(selected_documents)} documents, {total_chunks} total chunks, min {min_chunks_per_doc} per doc")
         
         # Create search client
         search_client = SearchClient(
@@ -421,11 +426,14 @@ def search_azure_with_document_filter(container_name, query, selected_documents,
             doc_filters = [f"title eq '{doc}'" for doc in selected_documents]
             doc_filter = " or ".join(doc_filters)
         
-        # Single search call for all selected documents
+        # Single search call for all selected documents with semantic ranking
         results = search_client.search(
             search_text=query,
             vector_queries=[vector_query],
             hybrid_search=HybridSearch(),
+            semantic_query=query,
+            semantic_configuration_name="default",
+            query_language="en-us",
             filter=doc_filter,
             top=required_chunks,
             include_total_count=True
@@ -468,6 +476,9 @@ def search_azure_with_document_filter(container_name, query, selected_documents,
                         fields="contentVector"
                     )],
                     hybrid_search=HybridSearch(),
+                    semantic_query=query,
+                    semantic_configuration_name="default",
+                    query_language="en-us",
                     filter=f"title eq '{doc_name}'",
                     top=additional_chunks_needed,
                     include_total_count=True
@@ -578,6 +589,377 @@ def calculate_chunk_similarity(chunk1, chunk2):
         logger.warning(f"⚠️ Error calculating chunk similarity: {str(e)}")
         return 0.0
 
+def group_chunks_by_document(search_results, max_chunks_per_group=20):
+    """
+    Group retrieved chunks by combining documents until reaching max_chunks_per_group
+    Prioritizes document narrative integrity while optimizing for chunk count
+    Returns list of document groups, each containing up to max_chunks_per_group chunks
+    """
+    try:
+        # Group chunks by document title first
+        chunks_by_doc = {}
+        for chunk in search_results:
+            doc_name = chunk.get('title', 'Unknown')
+            if doc_name not in chunks_by_doc:
+                chunks_by_doc[doc_name] = []
+            chunks_by_doc[doc_name].append(chunk)
+        
+        # Sort chunks within each document by relevance score (descending)
+        for doc_name in chunks_by_doc:
+            chunks_by_doc[doc_name] = sorted(chunks_by_doc[doc_name], key=lambda x: x.get('score', 0), reverse=True)
+        
+        # Create optimized document groups
+        document_groups = []
+        current_group_chunks = []
+        current_group_docs = []
+        current_group_count = 0
+        
+        # Process documents in order of total chunk count (largest first)
+        sorted_docs = sorted(chunks_by_doc.items(), key=lambda x: len(x[1]), reverse=True)
+        
+        for doc_name, doc_chunks in sorted_docs:
+            # If this document alone exceeds max_chunks_per_group, split it first
+            if len(doc_chunks) > max_chunks_per_group:
+                # Save current group if it has chunks
+                if current_group_chunks:
+                    group_name = f"Group {len(document_groups) + 1}: {', '.join(current_group_docs)}"
+                    document_groups.append({
+                        'document_name': group_name,
+                        'chunks': current_group_chunks,
+                        'chunk_count': current_group_count,
+                        'documents_included': current_group_docs.copy()
+                    })
+                    current_group_chunks = []
+                    current_group_docs = []
+                    current_group_count = 0
+                
+                # Split large document into multiple groups
+                for i in range(0, len(doc_chunks), max_chunks_per_group):
+                    group_chunks = doc_chunks[i:i + max_chunks_per_group]
+                    group_name = f"{doc_name} (Part {i//max_chunks_per_group + 1})"
+                    document_groups.append({
+                        'document_name': group_name,
+                        'chunks': group_chunks,
+                        'chunk_count': len(group_chunks),
+                        'documents_included': [doc_name]
+                    })
+            else:
+                # Check if adding this document would exceed the limit
+                if current_group_count + len(doc_chunks) <= max_chunks_per_group:
+                    # Add this document to current group
+                    current_group_chunks.extend(doc_chunks)
+                    current_group_docs.append(doc_name)
+                    current_group_count += len(doc_chunks)
+                else:
+                    # Current group is full, save it and start a new one
+                    if current_group_chunks:
+                        group_name = f"Group {len(document_groups) + 1}: {', '.join(current_group_docs)}"
+                        document_groups.append({
+                            'document_name': group_name,
+                            'chunks': current_group_chunks,
+                            'chunk_count': current_group_count,
+                            'documents_included': current_group_docs.copy()
+                        })
+                    
+                    # Start new group with this document
+                    current_group_chunks = doc_chunks.copy()
+                    current_group_docs = [doc_name]
+                    current_group_count = len(doc_chunks)
+        
+        # Don't forget the last group
+        if current_group_chunks:
+            group_name = f"Group {len(document_groups) + 1}: {', '.join(current_group_docs)}"
+            document_groups.append({
+                'document_name': group_name,
+                'chunks': current_group_chunks,
+                'chunk_count': current_group_count,
+                'documents_included': current_group_docs.copy()
+            })
+        
+        logger.info(f"📄 Document grouping complete: {len(document_groups)} groups from {len(chunks_by_doc)} documents")
+        for group in document_groups:
+            docs_str = ', '.join(group.get('documents_included', [group['document_name']]))
+            logger.info(f"   - {group['document_name']}: {group['chunk_count']} chunks from {len(group.get('documents_included', [group['document_name']]))} document(s)")
+        
+        return document_groups
+        
+    except Exception as e:
+        logger.error(f"❌ Error grouping chunks by document: {str(e)}")
+        return []
+
+def search_document_groups(container_name, query, selected_documents, total_chunks=70, min_chunks_per_doc=5, max_chunks_per_group=20, mmr_enabled=False):
+    """
+    Search Azure AI Search and group results by document
+    Returns document groups ready for multi-prompt processing
+    """
+    try:
+        # First, get all chunks using existing search function
+        logger.info(f"🔍 Starting document-grouped search: {len(selected_documents)} documents, {total_chunks} total chunks")
+        
+        search_results = search_azure_with_document_filter(
+            container_name, 
+            query, 
+            selected_documents,
+            total_chunks,
+            min_chunks_per_doc,
+            mmr_enabled=mmr_enabled,
+            mmr_lambda=0.5
+        )
+        
+        if not search_results:
+            logger.warning("⚠️ No search results found")
+            return []
+        
+        # Group chunks by document
+        document_groups = group_chunks_by_document(search_results, max_chunks_per_group)
+        
+        logger.info(f"✅ Document-grouped search complete: {len(document_groups)} groups ready for processing")
+        return document_groups
+        
+    except Exception as e:
+        logger.error(f"❌ Error in document-grouped search: {str(e)}")
+        return []
+
+def process_document_group(query, document_group, llm_model, system_prompt, group_index, total_groups):
+    """
+    Process a single document group with the LLM
+    Returns the response and metadata
+    """
+    try:
+        doc_name = document_group['document_name']
+        chunks = document_group['chunks']
+        
+        logger.info(f"🤖 Processing group {group_index}/{total_groups}: {doc_name} ({len(chunks)} chunks)")
+        
+        # Build context from chunks in this group
+        context = "\n\n".join([
+            f"Document: {chunk['title']}\nContent: {chunk['content']}"
+            for chunk in chunks
+        ])
+        
+        # Create prompt for this document group
+        group_prompt = f"""{system_prompt}
+
+Context from relevant documents:
+{context}
+
+Current Question: {query}
+
+EXTRACTION TASK:
+Extract verbatim excerpts from the documents above that answer the current question. 
+- Copy exact text from the documents
+- Do not analyze, interpret, or summarize
+- Provide whole sentences and complete thoughts
+- Include all relevant information with proper citations
+- Organize by document source
+
+Extracted excerpts:"""
+        
+        # Set up LLM based on model type
+        if llm_model in ["llama3-8B", "llama3-70B", "llama3.1-70B", "llama-4-Scout"]:
+            if llm_model == "llama3-8B":
+                api_base = os.environ.get("URL_AZURE_LLAMA3_8B")
+                api_key = os.environ.get("KEY_AZURE_LLAMA3_8B")
+            elif llm_model == "llama3-70B":
+                api_base = os.environ.get("URL_AZURE_LLAMA3_70B")
+                api_key = os.environ.get("KEY_AZURE_LLAMA3_70B")
+            elif llm_model == "llama3.1-70B":
+                api_base = os.environ.get("URL_AZURE_LLAMA3_1_70B")
+                api_key = os.environ.get("KEY_AZURE_LLAMA3_1_70B")
+            elif llm_model == "llama-4-Scout":
+                api_base = os.environ.get("URL_AZURE_LLAMA4_SCOUT")
+                api_key = os.environ.get("KEY_AZURE_LLAMA4_SCOUT")
+            
+            llm = OpenAI(
+                api_base=api_base,
+                api_key=api_key,
+                max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "4000")),
+                temperature=0.1
+            )
+        
+        elif llm_model in ["gpt-4o-mini", "gpt-4", "gpt-4o", "gpt-3.5-turbo", "o4-mini"]:
+            deployment_name = get_azure_openai_deployment_name(llm_model)
+            llm = AzureOpenAI(
+                engine=deployment_name,
+                azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT"),
+                api_key=os.environ.get("AZURE_OPENAI_API_KEY"),
+                api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
+                temperature=0.1 if not is_o_model(llm_model) else 1
+            )
+        
+        # Generate response for this group
+        response = llm.complete(group_prompt)
+        
+        return {
+            'document_name': doc_name,
+            'response': response.text,
+            'chunk_count': len(chunks),
+            'group_index': group_index,
+            'total_groups': total_groups,
+            'chunks_processed': chunks
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing document group {group_index}: {str(e)}")
+        return {
+            'document_name': document_group.get('document_name', 'Unknown'),
+            'response': f"Error processing this document group: {str(e)}",
+            'chunk_count': 0,
+            'group_index': group_index,
+            'total_groups': total_groups,
+            'chunks_processed': [],
+            'error': str(e)
+        }
+
+def aggregate_document_group_results(group_results, original_query, llm_model, system_prompt, chat_history=None):
+    """
+    Aggregate results from multiple document group queries
+    Compile all excerpts, group by document source, preserve exact quotes and page references
+    Uses the same system prompt to ensure consistency with extraction guidelines
+    """
+    try:
+        if not group_results:
+            return "No results to aggregate."
+        
+        logger.info(f"🔄 Aggregating results from {len(group_results)} document groups")
+        
+        # Build compilation prompt with all group results
+        compilation_context = ""
+        for group_result in group_results:
+            doc_name = group_result['document_name']
+            response = group_result['response']
+            chunk_count = group_result['chunk_count']
+            
+            compilation_context += f"\n\n{'='*60}\n"
+            compilation_context += f"RESULTS FROM: {doc_name} ({chunk_count} chunks processed)\n"
+            compilation_context += f"{'='*60}\n"
+            compilation_context += f"{response}\n"
+        
+        # Build chat history context for aggregation (last 4 messages to avoid token limits)
+        chat_context = ""
+        if chat_history:
+            recent_history = chat_history[-4:]
+            chat_context = "\n\nRecent Conversation Context:\n"
+            for msg in recent_history:
+                role = "You previously asked" if msg["role"] == "user" else "I previously answered"
+                chat_context += f"{role}: {msg['content'][:200]}...\n"
+        
+        # Create aggregation prompt with system prompt included
+        aggregation_prompt = f"""{system_prompt}
+
+COMPILATION CONTEXT:
+You are now compiling results from multiple document groups that have already been processed using the above system prompt. Each group has extracted comprehensive information from their respective document chunks.
+
+Original Question: {original_query}
+
+CRITICAL COMPILATION INSTRUCTIONS:
+1. ORGANIZE BY INDIVIDUAL DOCUMENT: Group all excerpts by their source document (e.g., "FGD-AGAB-PHI-8.docx", "FGD-AGAB-PHI-4.docx")
+2. PRESERVE VERBATIM EXCERPTS: Copy exact text from the group results below - DO NOT rewrite, analyze, or summarize
+3. NO ANALYSIS: Do not provide analysis, interpretation, or synthesis - just present the raw excerpts
+4. MAINTAIN CITATIONS: Keep all [file name - year] references exactly as they appear
+5. COMPREHENSIVE COVERAGE: Include ALL relevant excerpts from ALL document groups
+
+FORMAT REQUIREMENTS:
+- Use clear document headings: "=== DOCUMENT: [filename] ==="
+- Present excerpts as bullet points or numbered lists
+- Keep exact quotes with their original citations
+- Do not add commentary or analysis
+
+Results from Document Groups:
+{compilation_context}
+
+Previous chat context:
+{chat_context}
+
+Compiled Results (organized by individual document, verbatim excerpts only):"""
+        
+        # Set up LLM for aggregation
+        if llm_model in ["llama3-8B", "llama3-70B", "llama3.1-70B", "llama-4-Scout"]:
+            if llm_model == "llama3-8B":
+                api_base = os.environ.get("URL_AZURE_LLAMA3_8B")
+                api_key = os.environ.get("KEY_AZURE_LLAMA3_8B")
+            elif llm_model == "llama3-70B":
+                api_base = os.environ.get("URL_AZURE_LLAMA3_70B")
+                api_key = os.environ.get("KEY_AZURE_LLAMA3_70B")
+            elif llm_model == "llama3.1-70B":
+                api_base = os.environ.get("URL_AZURE_LLAMA3_1_70B")
+                api_key = os.environ.get("KEY_AZURE_LLAMA3_1_70B")
+            elif llm_model == "llama-4-Scout":
+                api_base = os.environ.get("URL_AZURE_LLAMA4_SCOUT")
+                api_key = os.environ.get("KEY_AZURE_LLAMA4_SCOUT")
+            
+            llm = OpenAI(
+                api_base=api_base,
+                api_key=api_key,
+                max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "4000")),
+                temperature=0.1
+            )
+        
+        elif llm_model in ["gpt-4o-mini", "gpt-4", "gpt-4o", "gpt-3.5-turbo", "o4-mini"]:
+            deployment_name = get_azure_openai_deployment_name(llm_model)
+            llm = AzureOpenAI(
+                engine=deployment_name,
+                azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT"),
+                api_key=os.environ.get("AZURE_OPENAI_API_KEY"),
+                api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
+                temperature=0.1 if not is_o_model(llm_model) else 1
+            )
+        
+        # Generate aggregated response
+        aggregated_response = llm.complete(aggregation_prompt)
+        
+        logger.info(f"✅ Aggregation complete: {len(group_results)} groups compiled")
+        return aggregated_response.text
+        
+    except Exception as e:
+        logger.error(f"❌ Error aggregating document group results: {str(e)}")
+        return f"Error during aggregation: {str(e)}"
+
+def process_document_groups_sequentially(query, document_groups, llm_model, system_prompt, progress_callback=None, chat_history=None):
+    """
+    Process each document group sequentially with progress tracking
+    Returns aggregated results from all groups
+    """
+    try:
+        if not document_groups:
+            return "No document groups to process."
+        
+        total_groups = len(document_groups)
+        group_results = []
+        
+        logger.info(f"🚀 Starting sequential processing of {total_groups} document groups")
+        
+        for i, document_group in enumerate(document_groups, 1):
+            # Update progress if callback provided
+            if progress_callback:
+                progress_callback(i, total_groups, document_group['document_name'])
+            
+            # Process this document group
+            group_result = process_document_group(
+                query, 
+                document_group, 
+                llm_model, 
+                system_prompt, 
+                i, 
+                total_groups
+            )
+            
+            group_results.append(group_result)
+            
+            # Log progress
+            logger.info(f"✅ Completed group {i}/{total_groups}: {document_group['document_name']}")
+        
+        # Aggregate all results
+        logger.info("🔄 Starting aggregation of all group results")
+        final_response = aggregate_document_group_results(group_results, query, llm_model, system_prompt, chat_history)
+        
+        logger.info(f"🎉 Multi-prompt processing complete: {total_groups} groups processed and aggregated")
+        return final_response, group_results
+        
+    except Exception as e:
+        logger.error(f"❌ Error in sequential document group processing: {str(e)}")
+        return f"Error during multi-prompt processing: {str(e)}", []
+
 def condense_question_with_context(current_query, chat_history, llm_model):
     """
     Condense the current question with chat history context to create a standalone query
@@ -654,6 +1036,88 @@ Standalone Question:"""
     except Exception as e:
         logger.error(f"❌ Error condensing query: {str(e)}")
         return current_query
+
+def save_debug_chunks(search_results, query, container_name):
+    """
+    Save retrieved chunks to a debug file for debugging
+    Only saves if DEBUG_VARIABLE environment variable is set to 1
+    """
+    # Check if debug saving is enabled
+    if os.environ.get("DEBUG_VARIABLE", "0") != "1":
+        logger.info("🔍 Debug saving disabled (DEBUG_VARIABLE != 1)")
+        return None
+        
+    try:
+        # Create debug directory in project root if it doesn't exist
+        debug_dir = Path("./debug")
+        debug_dir.mkdir(exist_ok=True)
+        
+        # Create filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_query = "".join(c for c in query[:50] if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        safe_query = safe_query.replace(' ', '_')
+        filename = f"chunks_{container_name}_{safe_query}_{timestamp}.txt"
+        filepath = debug_dir / filename
+        
+        # Write debug information
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write("AZURE AI SEARCH DEBUG - RETRIEVED CHUNKS\n")
+            f.write("=" * 80 + "\n")
+            f.write(f"Query: {query}\n")
+            f.write(f"Container: {container_name}\n")
+            f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Total chunks retrieved: {len(search_results)}\n")
+            f.write("=" * 80 + "\n\n")
+            
+            # Group chunks by document
+            chunks_by_doc = {}
+            for chunk in search_results:
+                doc_name = chunk.get('title', 'Unknown')
+                if doc_name not in chunks_by_doc:
+                    chunks_by_doc[doc_name] = []
+                chunks_by_doc[doc_name].append(chunk)
+            
+            # Write chunks grouped by document
+            for doc_name, chunks in chunks_by_doc.items():
+                f.write(f"\n{'='*60}\n")
+                f.write(f"DOCUMENT: {doc_name}\n")
+                f.write(f"Chunks from this document: {len(chunks)}\n")
+                f.write(f"{'='*60}\n\n")
+                
+                for i, chunk in enumerate(chunks, 1):
+                    f.write(f"--- CHUNK {i} ---\n")
+                    f.write(f"Score: {chunk.get('score', 'N/A')}\n")
+                    f.write(f"Filepath: {chunk.get('filepath', 'N/A')}\n")
+                    f.write(f"Content:\n{chunk.get('content', 'No content')}\n")
+                    f.write(f"\n{'---'*20}\n\n")
+            
+            # Write summary statistics
+            f.write(f"\n{'='*80}\n")
+            f.write("SUMMARY STATISTICS\n")
+            f.write(f"{'='*80}\n")
+            f.write(f"Total documents consulted: {len(chunks_by_doc)}\n")
+            f.write(f"Total chunks retrieved: {len(search_results)}\n")
+            
+            # Document breakdown
+            f.write(f"\nDocument breakdown:\n")
+            for doc_name, chunks in chunks_by_doc.items():
+                f.write(f"  - {doc_name}: {len(chunks)} chunks\n")
+            
+            # Score statistics
+            scores = [chunk.get('score', 0) for chunk in search_results if chunk.get('score') is not None]
+            if scores:
+                f.write(f"\nScore statistics:\n")
+                f.write(f"  - Min score: {min(scores):.4f}\n")
+                f.write(f"  - Max score: {max(scores):.4f}\n")
+                f.write(f"  - Avg score: {sum(scores)/len(scores):.4f}\n")
+        
+        logger.info(f"🔍 DEBUG: Saved {len(search_results)} chunks to: {filepath.absolute()}")
+        return str(filepath.absolute())
+        
+    except Exception as e:
+        logger.error(f"❌ Error saving debug chunks: {str(e)}")
+        return None
 
 def generate_llm_response_with_context(query, search_results, llm_model, system_prompt, chat_history):
     """Enhanced response generation that includes chat context"""
@@ -754,16 +1218,16 @@ When answering a question:
 3. CITATIONS: Add a simple reference to each extraction using the format [file name - year (if applicable)]. DO NOT INCLUDE THE PAGE. 
 4. DETAIL LEVEL: Extract relevant information that answers the question in detail. Provide evidence (such as data/results, programs/partners, implementation details, challenges, dates/locations), or context that is tied to the question where it is present. 
 5. EXCLUSION: Only exclude background or information that does not connect to the question at all. Do not: interpret, analyse, infer, or add any external information.
- 
-Points to remember:
- 
+6. COMPLETENESS: Include any relevant information from the documents to answer the question. Do not skip any information.
+
+Points to remember: 
 1. Multi-country documents: Some documents in this knowledge base may be global or mention multitple countries. Always extract information only for countries in the EAST-ASIA PACIFIC region. Within this region, explicit instructions will be given in the chat when you need to extract information for one specific country or group of countries. 
 2. Acronyms: The documents in this knowledge base contain some commonly used abbreviations and some specific acronyms related to this assignment. You MUST extract text to answer evaluation questions along with acronyms, where applicable. Do NOT leave out any excerpts if you do not understand the acronyms, simply extract as it is. 
 Commonly used acronym types and list to look out for (including but not limited to): 
 Population sub-groups: AG = adolescent girls, AB = adolescent boys, and others such as HW, YP…
 UNICEF areas of work: CP = child protection, ALS = alternate learning systems, and others such as OOS, CSE, SP, VAC, VAW, GBV, CEFMU, CM, SBC, MHM, NFE, ECCD, GE, GR…
 Offices, Departments and Other Occupational Units: CO = Country Office, FP = focal point, DoE = Department of Education and others such as RO, DoH, MoH, NAP, RHU, LGU, GAWG, IP…
-  """
+   """
 
 if password_input==password_unicef:
     azure_storage_account_name = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
@@ -796,13 +1260,18 @@ if password_input==password_unicef:
 
     st.sidebar.error("1️⃣ Select your knowledge base and model")
     container_name = st.sidebar.selectbox("Knowledge base choice: ", container_list)
-    model_variable = st.sidebar.selectbox("Model choice: ", ["o4-mini","gpt-4","gpt-4o","llama-4-Scout"])
+    model_variable = st.sidebar.selectbox("Model choice: ", ["gpt-4o","o4-mini","gpt-4","llama-4-Scout"])
     deep_research = st.sidebar.checkbox(
     "🔎 Deep Research",
     value=False,
     key="deep_research",
     help="Enable it when going through many or heavy documents"
 )
+
+    # Set default values without UI controls
+    use_multi_prompt = True  # Multi-prompt strategy ON by default
+    mmr_enabled = False      # MMR diversity OFF by default
+    
 
 
 
@@ -850,34 +1319,65 @@ if password_input==password_unicef:
     # Document selection interface
     st.sidebar.markdown("---")
     st.sidebar.subheader("📄 Select Documents to Search - No more than 10")
-    
+
     blob_list = list_all_files(container_name)
-    
+
     # Initialize selected documents if container changed or first time
     if (st.session_state.current_container != container_name or 
-        not st.session_state.selected_documents):
+        not hasattr(st.session_state, 'selected_documents')):
         # Select all documents by default
         st.session_state.selected_documents = {doc["Name"] for doc in blob_list}
-    
+
+    # Initialize action flags for button clicks
+    if "select_all_clicked" not in st.session_state:
+        st.session_state.select_all_clicked = False
+    if "deselect_all_clicked" not in st.session_state:
+        st.session_state.deselect_all_clicked = False
+
+    # Add Select All / Deselect All buttons
+    col1, col2 = st.sidebar.columns(2)
+
+    with col1:
+        if st.button("✅ Select All", help="Select all available documents", key="select_all_btn"):
+            st.session_state.select_all_clicked = True
+            st.session_state.deselect_all_clicked = False
+
+    with col2:
+        if st.button("❌ Deselect All", help="Deselect all documents", key="deselect_all_btn"):
+            st.session_state.deselect_all_clicked = True
+            st.session_state.select_all_clicked = False
+
+    # Apply button actions
+    if st.session_state.select_all_clicked:
+        st.session_state.selected_documents = {doc["Name"] for doc in blob_list}
+        st.session_state.select_all_clicked = False  # Reset flag
+
+    if st.session_state.deselect_all_clicked:
+        st.session_state.selected_documents = set()
+        st.session_state.deselect_all_clicked = False  # Reset flag
+
     # Document selection checkboxes
-    selected_docs = []
+    selected_docs_temp = set()
     for doc in blob_list:
         doc_name = doc["Name"]
+        
+        # Checkbox reflects current selection state
         is_selected = st.sidebar.checkbox(
             doc_name,
             value=doc_name in st.session_state.selected_documents,
-            key=f"doc_{doc_name}"
+            key=f"doc_checkbox_{doc_name}"
         )
+        
         if is_selected:
-            selected_docs.append(doc_name)
-    
-    # Update session state with current selection
-    st.session_state.selected_documents = set(selected_docs)
-    
+            selected_docs_temp.add(doc_name)
+
+    # Update session state with current checkbox states
+    st.session_state.selected_documents = selected_docs_temp
+
     # Show selection summary
-    if selected_docs:
-        chunks_per_doc = 80 // len(selected_docs) if deep_research else 50 // len(selected_docs)
-        st.sidebar.success(f"✅ {len(selected_docs)} document(s) selected")
+    if st.session_state.selected_documents:
+        chunks_per_doc = 100 // len(st.session_state.selected_documents) if deep_research else 70 // len(st.session_state.selected_documents)
+        st.sidebar.success(f"✅ {len(st.session_state.selected_documents)} document(s) selected")
         st.sidebar.info(f"📊 ~{chunks_per_doc} chunks per document")
         st.sidebar.info(f"📊 Minimum: 5 chunks per document")
     else:
@@ -973,47 +1473,145 @@ if password_input==password_unicef:
                                 st.write(f"**Original:** {prompt}")
                                 st.write(f"**Condensed:** {condensed_query}")
                     
-                    # Step 2: Search Azure with multi-document strategy
-                    with st.spinner("🔍 Searching selected documents..."):
-                        # Calculate total chunks based on deep research setting
-                        total_chunks = 70 if deep_research else 40
-                        
-                        # Debug: Show what we're searching
-                        st.write(f"🔍 **Debug:** Searching {len(st.session_state.selected_documents)} documents: {list(st.session_state.selected_documents)}")
-                        st.write(f"📊 **Total chunks to retrieve:** {total_chunks}")
-                        
-                        # Use multi-document search with selected documents
-                        search_results = search_azure_with_document_filter(
-                            container_name, 
-                            condensed_query,  # Use condensed query for search
-                            st.session_state.selected_documents,
-                            total_chunks,
-                            min_chunks_per_doc=5,  # Ensure minimum 5 chunks per document
-                            mmr_enabled=True,  # Always enable MMR
-                            mmr_lambda=0.5  # Fixed balanced setting
-                        )
-                        
-                        if not search_results:
-                            response_text = "No relevant documents found for your query."
-                            st.write(response_text)
-                            st.session_state.messages.append({"role": "assistant", "content": response_text})
-                        else:
-                            # Show search results info
-                            docs_consulted = len(set(result['title'] for result in search_results))
-                            st.info(f"🔍 Searched {len(st.session_state.selected_documents)} selected documents • Retrieved {len(search_results)} chunks from {docs_consulted} documents")
+                    # Step 2: Choose Processing Strategy
+                    if use_multi_prompt:
+                        # Multi-Prompt Document-Grouped Search and Processing
+                        with st.spinner("🔍 Searching and grouping documents..."):
+                            # Calculate total chunks based on deep research setting
+                            total_chunks = 100 if deep_research else 70
+                            max_chunks_per_group = 20  # Document-grouped strategy limit
                             
-                            # Step 3: Generate response with both document context and chat history
-                            with st.spinner("🤖 Generating response..."):
-                                response_text = generate_llm_response_with_context(
-                                    prompt,  # Use original query for response generation
-                                    search_results, 
-                                    model_variable, 
-                                    st.session_state.system_prompt,
-                                    st.session_state.messages[:-1]  # Pass chat history
-                                )
+                            # Debug: Show what we're searching
+                            st.write(f"🔍 **Searching** {len(st.session_state.selected_documents)} documents: {list(st.session_state.selected_documents)}")
+                            st.write(f"📊 **Total chunks to retrieve:** {total_chunks}")
+                            # st.write(f"📊 **Max chunks per group:** {max_chunks_per_group}")
+                            # st.info("🔄 Using Multi-Prompt Strategy: Document-grouped processing to avoid context overload")
                             
-                            st.write(response_text)
-                            st.session_state.messages.append({"role": "assistant", "content": response_text})
+                            # Use document-grouped search
+                            document_groups = search_document_groups(
+                                container_name, 
+                                condensed_query,  # Use condensed query for search
+                                st.session_state.selected_documents,
+                                total_chunks,
+                                min_chunks_per_doc=5,  # Ensure minimum 5 chunks per document
+                                max_chunks_per_group=max_chunks_per_group,
+                                mmr_enabled=mmr_enabled  # Use UI toggle setting
+                            )
+                            
+                            if not document_groups:
+                                response_text = "No relevant documents found for your query."
+                                st.write(response_text)
+                                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                            else:
+                                # Show document groups info
+                                total_chunks_retrieved = sum(group['chunk_count'] for group in document_groups)
+                                all_docs_included = set()
+                                for group in document_groups:
+                                    docs_included = group.get('documents_included', [group['document_name']])
+                                    all_docs_included.update(docs_included)
+                                st.info(f"🔍 Searched {len(st.session_state.selected_documents)} selected documents • Retrieved {total_chunks_retrieved} chunks from {len(all_docs_included)} documents • Created {len(document_groups)} processing groups")
+                                
+                                # Save debug information for all chunks
+                                all_chunks = []
+                                for group in document_groups:
+                                    all_chunks.extend(group['chunks'])
+                                debug_file = save_debug_chunks(all_chunks, condensed_query, container_name)
+                                if debug_file:
+                                    st.success(f"🔍 Debug: Chunks saved to {debug_file}")
+                                    logger.info(f"🔍 DEBUG FILE: {debug_file}")
+                                
+                                # Step 3: Multi-Prompt Processing with Progress Tracking
+                                progress_container = st.container()
+                                progress_bar = st.progress(0)
+                                status_text = st.empty()
+                                
+                                def update_progress(current_group, total_groups, doc_name):
+                                    progress = current_group / total_groups
+                                    progress_bar.progress(progress)
+                                    status_text.info(f"🤖 Processing group {current_group}/{total_groups}: {doc_name}")
+                                
+                                with st.spinner("🤖 Processing document groups with multi-prompt strategy..."):
+                                    response_text, group_results = process_document_groups_sequentially(
+                                        prompt,  # Use original query for response generation
+                                        document_groups,
+                                        model_variable, 
+                                        st.session_state.system_prompt,
+                                        progress_callback=update_progress,
+                                        chat_history=st.session_state.messages[:-1]  # Pass chat history
+                                    )
+                                
+                                # Clear progress indicators
+                                progress_bar.empty()
+                                status_text.empty()
+                                
+                                # Show processing summary
+                                successful_groups = len([r for r in group_results if 'error' not in r])
+                                total_chunks_processed = sum(r.get('chunk_count', 0) for r in group_results)
+                                st.success(f"✅ Multi-prompt processing complete: {successful_groups}/{len(document_groups)} groups processed successfully ({total_chunks_processed} total chunks)")
+                                
+                                # Show detailed group results in expandable section
+                                with st.expander("📊 Detailed Processing Results", expanded=False):
+                                    for result in group_results:
+                                        status = "✅" if 'error' not in result else "❌"
+                                        docs_included = result.get('documents_included', [result['document_name']])
+                                        docs_str = ', '.join(docs_included) if len(docs_included) > 1 else docs_included[0]
+                                        st.write(f"{status} **{result['document_name']}**: {result.get('chunk_count', 0)} chunks from {len(docs_included)} document(s)")
+                                        if len(docs_included) > 1:
+                                            st.caption(f"   Documents: {docs_str}")
+                                        if 'error' in result:
+                                            st.error(f"Error: {result['error']}")
+                                
+                                st.write(response_text)
+                                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                    else:
+                        # Original Single-Prompt Strategy
+                        with st.spinner("🔍 Searching selected documents..."):
+                            # Calculate total chunks based on deep research setting
+                            total_chunks = 100 if deep_research else 70
+                            
+                            # Debug: Show what we're searching
+                            st.write(f"🔍 **Debug:** Searching {len(st.session_state.selected_documents)} documents: {list(st.session_state.selected_documents)}")
+                            st.write(f"📊 **Total chunks to retrieve:** {total_chunks}")
+                            st.info("📝 Using Single-Prompt Strategy: Traditional RAG processing")
+                            
+                            # Use multi-document search with selected documents
+                            search_results = search_azure_with_document_filter(
+                                container_name, 
+                                condensed_query,  # Use condensed query for search
+                                st.session_state.selected_documents,
+                                total_chunks,
+                                min_chunks_per_doc=5,  # Ensure minimum 5 chunks per document
+                                mmr_enabled=mmr_enabled,  # Use UI toggle setting
+                                mmr_lambda=0.5  # Fixed balanced setting
+                            )
+                            
+                            if not search_results:
+                                response_text = "No relevant documents found for your query."
+                                st.write(response_text)
+                                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                            else:
+                                # Show search results info
+                                docs_consulted = len(set(result['title'] for result in search_results))
+                                st.info(f"🔍 Searched {len(st.session_state.selected_documents)} selected documents • Retrieved {len(search_results)} chunks from {docs_consulted} documents")
+                                
+                                # Save debug information
+                                debug_file = save_debug_chunks(search_results, condensed_query, container_name)
+                                if debug_file:
+                                    st.success(f"🔍 Debug: Chunks saved to {debug_file}")
+                                    logger.info(f"🔍 DEBUG FILE: {debug_file}")
+                                
+                                # Step 3: Generate response with both document context and chat history
+                                with st.spinner("🤖 Generating response..."):
+                                    response_text = generate_llm_response_with_context(
+                                        prompt,  # Use original query for response generation
+                                        search_results, 
+                                        model_variable, 
+                                        st.session_state.system_prompt,
+                                        st.session_state.messages[:-1]  # Pass chat history
+                                    )
+                                
+                                st.write(response_text)
+                                st.session_state.messages.append({"role": "assistant", "content": response_text})
                     
                 except Exception as e:
                     error_msg = f"❌ Error: {str(e)}"
