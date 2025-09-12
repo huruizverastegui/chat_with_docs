@@ -283,6 +283,72 @@ index_client  = SearchIndexClient(SEARCH_ENDPOINT, AzureKeyCredential(SEARCH_ADM
 indexer_client = SearchIndexerClient(SEARCH_ENDPOINT, AzureKeyCredential(SEARCH_ADMIN_KEY))
 
 
+# def put_skillset_raw(*, skillset_name: str, index_name: str):
+#     endpoint = os.environ["SEARCH_ENDPOINT"].rstrip("/")
+#     admin_key = os.environ["SEARCH_ADMIN_KEY"]
+
+#     aoai = os.environ["AZURE_OPENAI_ENDPOINT"].rstrip("/")
+#     if "openai.azure.com" not in aoai:
+#         raise RuntimeError("AZURE_OPENAI_ENDPOINT must be like https://<name>.openai.azure.com")
+
+#     dep  = os.environ["AZURE_EMBEDDING_DEPLOYMENT"]
+#     dims = 1536 if "3-small" in dep else 3072
+
+#     url = f"{endpoint}/skillsets/{skillset_name}?api-version={SEARCH_API_VERSION}"
+#     headers = {"Content-Type": "application/json", "api-key": admin_key}
+
+#     split_skill = {
+#         "@odata.type": "#Microsoft.Skills.Text.SplitSkill",
+#         "name": "split",
+#         "description": "Split document text into paragraph-aware chunks preserving thematic context",
+#         "context": "/document",
+#         "textSplitMode": "paragraphs",
+#         "maximumPageLength": 512,
+#         "inputs": [{"name": "text", "source": "/document/content"}],
+#         "outputs": [{"name": "textItems", "targetName": "pages"}]
+#     }
+
+#     embed_skill = {
+#         "@odata.type": "#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill",
+#         "name": "embed",
+#         "description": "Embed each page with Azure OpenAI",
+#         "context": "/document/pages/*",
+#         # IMPORTANT: use resourceUri + apiKey on this API version
+#         "resourceUri": aoai,
+#         "deploymentId": dep,
+#         "modelName": dep,
+#         "dimensions": dims,
+#         "inputs": [{"name": "text", "source": "/document/pages/*"}],
+#         "outputs": [{"name": "embedding", "targetName": "page_vector"}]
+#     }
+#     api_key = os.getenv("AZURE_OPENAI_API_KEY")
+#     if api_key:
+#         embed_skill["apiKey"] = api_key  # not httpHeaders
+
+#     payload = {
+#         "name": skillset_name,
+#         "skills": [split_skill, embed_skill],
+#         "indexProjections": {
+#             "selectors": [{
+#                 "targetIndexName": index_name,
+#                 "parentKeyFieldName": "parent_id",
+#                 "sourceContext": "/document/pages/*",
+#                 "mappings": [
+#                     {"name": "content",       "source": "/document/pages/*"},
+#                     {"name": "contentVector", "source": "/document/pages/*/page_vector"},
+#                     {"name": "title",         "source": "/document/metadata_storage_name"},
+#                     {"name": "container",     "source": "/document/metadata_storage_container"},
+#                     {"name": "filepath",      "source": "/document/metadata_storage_path"}
+#                 ]
+#             }],
+#             "parameters": {"projectionMode": "skipIndexingParentDocuments"}
+#         }
+#     }
+
+#     r = requests.put(url, headers=headers, data=json.dumps(payload))
+#     if not r.ok:
+#         raise RuntimeError(f"Skillset upsert failed: {r.status_code} {r.text}")
+
 def put_skillset_raw(*, skillset_name: str, index_name: str):
     endpoint = os.environ["SEARCH_ENDPOINT"].rstrip("/")
     admin_key = os.environ["SEARCH_ADMIN_KEY"]
@@ -294,49 +360,72 @@ def put_skillset_raw(*, skillset_name: str, index_name: str):
     dep  = os.environ["AZURE_EMBEDDING_DEPLOYMENT"]
     dims = 1536 if "3-small" in dep else 3072
 
+    # 🔑 NEW: Azure AI services (Cognitive Services) for billing Document Layout, etc.
+    cog_subdomain = os.environ["AZURE_COG_SERVICES_ENDPOINT"].rstrip("/")
+    cog_key = os.environ["AZURE_COG_SERVICES_KEY"]
+
     url = f"{endpoint}/skillsets/{skillset_name}?api-version={SEARCH_API_VERSION}"
     headers = {"Content-Type": "application/json", "api-key": admin_key}
+
+    layout_skill = {
+        "@odata.type": "#Microsoft.Skills.Util.DocumentIntelligenceLayoutSkill",
+        "name": "layout",
+        "context": "/document",
+        "outputMode": "oneToMany",  
+        "inputs": [{"name": "file_data", "source": "/document/file_data"}],
+        "outputs": [{"name": "markdown_document", "targetName": "markdownDocument"}]
+    }
 
     split_skill = {
         "@odata.type": "#Microsoft.Skills.Text.SplitSkill",
         "name": "split",
-        "description": "Split document text into ~1k-token pages",
-        "context": "/document",
+        "description": "Split markdown sections into page-length chunks (multi-sentence)",
+        "context": "/document/markdownDocument/*",
         "textSplitMode": "pages",
-        "maximumPageLength": 512,
-        "pageOverlapLength": 120,
-        "inputs": [{"name": "text", "source": "/document/content"}],
+        "unit": "azureOpenAITokens",
+        "defaultLanguageCode": "en",      
+        "maximumPageLength": 150,
+        "pageOverlapLength": 20,
+        "inputs": [{"name": "text", "source": "/document/markdownDocument/*/content"}],
         "outputs": [{"name": "textItems", "targetName": "pages"}]
     }
 
     embed_skill = {
         "@odata.type": "#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill",
         "name": "embed",
-        "description": "Embed each page with Azure OpenAI",
-        "context": "/document/pages/*",
-        # IMPORTANT: use resourceUri + apiKey on this API version
+        "description": "Embed each chunk with Azure OpenAI",
+        "context": "/document/markdownDocument/*/pages/*",
         "resourceUri": aoai,
         "deploymentId": dep,
         "modelName": dep,
         "dimensions": dims,
-        "inputs": [{"name": "text", "source": "/document/pages/*"}],
+        "inputs": [{"name": "text", "source": "/document/markdownDocument/*/pages/*"}],
         "outputs": [{"name": "embedding", "targetName": "page_vector"}]
     }
     api_key = os.getenv("AZURE_OPENAI_API_KEY")
     if api_key:
-        embed_skill["apiKey"] = api_key  # not httpHeaders
+        embed_skill["apiKey"] = api_key
+
+    # ✨ NEW: attach Azure AI services to the skillset (key-based)
+    cognitive_services = {
+        "@odata.type": "#Microsoft.Azure.Search.AIServicesByKey",
+        "description": "billing for built-in skills",
+        "subdomainUrl": cog_subdomain,  # e.g., https://mycogsvc.cognitiveservices.azure.com
+        "key": cog_key
+    }
 
     payload = {
         "name": skillset_name,
-        "skills": [split_skill, embed_skill],
+        "skills": [layout_skill, split_skill, embed_skill],
+        "cognitiveServices": cognitive_services,   # <-- added
         "indexProjections": {
             "selectors": [{
                 "targetIndexName": index_name,
                 "parentKeyFieldName": "parent_id",
-                "sourceContext": "/document/pages/*",
+                "sourceContext": "/document/markdownDocument/*/pages/*",
                 "mappings": [
-                    {"name": "content",       "source": "/document/pages/*"},
-                    {"name": "contentVector", "source": "/document/pages/*/page_vector"},
+                    {"name": "content",       "source": "/document/markdownDocument/*/pages/*"},
+                    {"name": "contentVector", "source": "/document/markdownDocument/*/pages/*/page_vector"},
                     {"name": "title",         "source": "/document/metadata_storage_name"},
                     {"name": "container",     "source": "/document/metadata_storage_container"},
                     {"name": "filepath",      "source": "/document/metadata_storage_path"}
@@ -350,6 +439,7 @@ def put_skillset_raw(*, skillset_name: str, index_name: str):
     if not r.ok:
         raise RuntimeError(f"Skillset upsert failed: {r.status_code} {r.text}")
 
+
 def kb_names(container: str):
     # s = sanitize_container_name(container)
     s = container
@@ -361,6 +451,40 @@ def kb_names(container: str):
     }
 
 
+def debug_print_skillset(skillset_name: str):
+    """Fetch and display the current skillset wiring (cognitiveServices, paths, etc.)."""
+    endpoint = os.environ["SEARCH_ENDPOINT"].rstrip("/")
+    admin_key = os.environ["SEARCH_ADMIN_KEY"]
+    url = f"{endpoint}/skillsets/{skillset_name}?api-version={SEARCH_API_VERSION}"
+    r = requests.get(url, headers={"api-key": admin_key})
+    r.raise_for_status()
+    sk = r.json()
+
+    # Console output (shows in Streamlit server logs)
+    print("=== Skillset Debug ===")
+    print("name:", sk.get("name"))
+    print("cognitiveServices:", sk.get("cognitiveServices", None))
+    for s in sk.get("skills", []):
+        if s.get("name") == "layout":
+            print("layout.outputMode:", s.get("outputMode"))
+        if s.get("name") == "split":
+            print("split.context:", s.get("context"))
+            print("split.textSplitMode:", s.get("textSplitMode"))
+            print("split.unit:", s.get("unit"))
+            print("split.maximumPageLength:", s.get("maximumPageLength"))
+            print("split.pageOverlapLength:", s.get("pageOverlapLength"))
+
+    # Optional: show in the Streamlit UI too
+    try:
+        st.expander("🔎 Skillset debug").json({
+            "cognitiveServices": sk.get("cognitiveServices"),
+            "skills": [
+                {k: v for k, v in s.items() if k in ("name","@odata.type","context","outputMode","textSplitMode","unit","maximumPageLength","pageOverlapLength")}
+                for s in sk.get("skills", [])
+            ]
+        })
+    except Exception:
+        pass
 
 
 def ensure_kb_index(container: str):
@@ -430,7 +554,6 @@ def ensure_kb_index(container: str):
 
 
 
-
 def ensure_kb_pipeline(container: str):
     names = kb_names(container)
 
@@ -448,6 +571,8 @@ def ensure_kb_pipeline(container: str):
 
     # 2) Skillset via RAW REST (bypasses SDK serialization issues)
     put_skillset_raw(skillset_name=names["skillset"], index_name=names["index"])
+    debug_print_skillset(names["skillset"]) 
+    
 
     # 3) Indexer ties it together (SDK is fine here)
     indexer = SearchIndexer(
@@ -458,7 +583,8 @@ def ensure_kb_pipeline(container: str):
         parameters=IndexingParameters(configuration={
             "dataToExtract": "contentAndMetadata",
             "parsingMode": "default",
-            "failOnUnsupportedContentType": False
+            "failOnUnsupportedContentType": False,
+            "allowSkillsetToReadFileData": True 
         }),
         # schedule=IndexingSchedule(interval="PT15M")  # optional
     )
@@ -472,6 +598,10 @@ def ensure_kb_resources(container: str):
 def run_kb_indexer(container: str):
     """Trigger ingestion for this KB now."""
     names = kb_names(container)
+    try:
+        indexer_client.reset_indexer(names["indexer"])  # ← add this
+    except Exception:
+        pass
     indexer_client.run_indexer(names["indexer"])
 
 def show_indexer_status(container: str):
