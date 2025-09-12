@@ -26,4 +26,3 @@ llama-index-llms-azure-openai
 psutil==5.9.0
 azure-search-documents>=11.6.0b1
 llama-index-vector-stores-azureaisearch
-
