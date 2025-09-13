@@ -787,6 +787,15 @@ Extracted excerpts:"""
                 temperature=0.1 if not is_o_model(llm_model) else 1
             )
         
+        # Save debug prompt for document group processing
+        save_debug_prompt(
+            group_prompt, 
+            "document_group", 
+            llm_model, 
+            query,
+            f"Group {group_index}/{total_groups}: {doc_name}, Chunks: {len(chunks)}"
+        )
+        
         # Generate response for this group
         response = llm.complete(group_prompt)
         
@@ -904,6 +913,15 @@ Compiled Results (organized by individual document, verbatim excerpts only):"""
                 api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
                 temperature=0.1 if not is_o_model(llm_model) else 1
             )
+        
+        # Save debug prompt for aggregation
+        save_debug_prompt(
+            aggregation_prompt, 
+            "aggregation", 
+            llm_model, 
+            original_query,
+            f"Group results: {len(group_results)} groups, Chat history: {len(chat_history) if chat_history else 0} messages"
+        )
         
         # Generate aggregated response
         aggregated_response = llm.complete(aggregation_prompt)
@@ -1088,6 +1106,15 @@ Standalone Question:"""
         )
     
     try:
+        # Save debug prompt for condensing
+        save_debug_prompt(
+            condense_prompt, 
+            "condensing", 
+            llm_model, 
+            current_query,
+            f"Chat history length: {len(chat_history)}, Total context messages: {total_used}"
+        )
+        
         condensed_response = llm.complete(condense_prompt)
         condensed_query = condensed_response.text.strip()
         
@@ -1102,6 +1129,53 @@ Standalone Question:"""
     except Exception as e:
         logger.error(f"❌ Error condensing query: {str(e)}")
         return current_query
+
+def save_debug_prompt(prompt_content, query_type, model_name, query, additional_info=""):
+    """
+    Save the full prompt being sent to the LLM for debugging
+    Only saves if DEBUG_VARIABLE environment variable is set to 1
+    """
+    # Check if debug saving is enabled
+    if os.environ.get("DEBUG_VARIABLE", "0") != "1":
+        logger.info("🔍 Debug prompt saving disabled (DEBUG_VARIABLE != 1)")
+        return None
+        
+    try:
+        # Create debug directory in project root if it doesn't exist
+        debug_dir = Path("./debug")
+        debug_dir.mkdir(exist_ok=True)
+        
+        # Create filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_query = "".join(c for c in query[:30] if c.isalnum() or c in (' ', '-', '_')).rstrip()
+        safe_query = safe_query.replace(' ', '_')
+        filename = f"prompt_{query_type}_{model_name}_{safe_query}_{timestamp}.txt"
+        filepath = debug_dir / filename
+        
+        # Write debug information
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write("LLM PROMPT DEBUG - FULL PROMPT SENT TO API\n")
+            f.write("=" * 80 + "\n")
+            f.write(f"Query Type: {query_type}\n")
+            f.write(f"Model: {model_name}\n")
+            f.write(f"Original Query: {query}\n")
+            f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Additional Info: {additional_info}\n")
+            f.write("=" * 80 + "\n\n")
+            f.write("FULL PROMPT CONTENT:\n")
+            f.write("-" * 40 + "\n")
+            f.write(prompt_content)
+            f.write("\n" + "-" * 40 + "\n")
+            f.write(f"\nPrompt Length: {len(prompt_content)} characters\n")
+            f.write(f"Prompt Word Count: {len(prompt_content.split())} words\n")
+        
+        logger.info(f"🔍 DEBUG: Saved prompt to: {filepath.absolute()}")
+        return str(filepath.absolute())
+        
+    except Exception as e:
+        logger.error(f"❌ Error saving debug prompt: {str(e)}")
+        return None
 
 def save_debug_chunks(search_results, query, container_name):
     """
@@ -1256,6 +1330,15 @@ Answer the current question based on the provided document context, and consider
             temperature=0.1 if not is_o_model(llm_model) else 1
         )
     
+    # Save debug prompt for main response generation
+    save_debug_prompt(
+        full_prompt, 
+        "main_response", 
+        llm_model, 
+        query,
+        f"Search results: {len(search_results)} chunks, Chat history: {len(chat_history) if chat_history else 0} messages"
+    )
+    
     # Generate response
     response = llm.complete(full_prompt)
     return response.text
@@ -1270,7 +1353,12 @@ def generate_chat_only_response(query, llm_model, chat_history):
         chat_context = initial_context + recent_context
     
     # Create chat-only prompt
-    chat_prompt = f"""You are a helpful AI assistant. You are currently in chat-only mode, which means you are not searching any documents. Please respond to the user's question based on your general knowledge and the conversation context.
+    chat_prompt = f"""You are an expert research assistant. You are assisting a formative evaluation of UNICEF East Asia Pacific's adolescent girls–focused programming for the period of 2022–2025. Your task is to review selected documents in this knowledge base and extract verbatim excerpts or exact text to answer specific questions. You are currently in chat-only mode, which means you are not searching any documents. Please respond to the user's question based on your general knowledge and the conversation context.
+
+When answering a question:
+1. COMPREHENSIVENESS: Always search across all available information
+2. EXCLUSION: Only exclude background or information that does not connect to the question at all. Do not: interpret, analyse, infer, or add any external information.
+3. COMPLETENESS: Include any relevant information to answer the question. Do not skip any information.
 
 {chat_context}
 
@@ -1311,6 +1399,15 @@ Please provide a helpful response. If the user is asking about documents or rese
             api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
             temperature=0.1 if not is_o_model(llm_model) else 1
         )
+    
+    # Save debug prompt for chat-only response
+    save_debug_prompt(
+        chat_prompt, 
+        "chat_only", 
+        llm_model, 
+        query,
+        f"Chat history: {len(chat_history) if chat_history else 0} messages"
+    )
     
     # Generate response
     response = llm.complete(chat_prompt)
