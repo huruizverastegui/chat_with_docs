@@ -960,32 +960,98 @@ def process_document_groups_sequentially(query, document_groups, llm_model, syst
         logger.error(f"❌ Error in sequential document group processing: {str(e)}")
         return f"Error during multi-prompt processing: {str(e)}", []
 
+def build_hybrid_context(chat_history, max_initial_user_inputs=3, max_recent_messages=6):
+    """
+    Build hybrid context that preserves initial user inputs and their responses, plus recent conversation
+    
+    Smart logic: Only includes assistant responses ≤1000 characters as "instruction confirmations".
+    Longer responses indicate real questions, so those user inputs are excluded from initial context.
+    
+    Args:
+        chat_history: List of chat messages
+        max_initial_user_inputs: Number of initial user inputs to preserve (default: 3)
+        max_recent_messages: Number of recent messages to include (default: 6)
+    
+    Returns:
+        Tuple of (initial_context, recent_context, total_messages_used)
+    """
+    if not chat_history:
+        return "", "", 0
+    
+    total_messages = len(chat_history)
+    
+    # Find the first N user inputs and their corresponding responses
+    # Skip responses longer than 1000 chars (likely real questions, not instructions)
+    user_inputs_found = 0
+    initial_messages = []
+    
+    for i, msg in enumerate(chat_history):
+        if msg["role"] == "user":
+            user_inputs_found += 1
+            if user_inputs_found > max_initial_user_inputs:
+                break
+            initial_messages.append(msg)
+        elif msg["role"] == "assistant":
+            # Only include assistant response if it's short (likely instruction confirmation)
+            if len(msg["content"]) <= 1000:
+                initial_messages.append(msg)
+            else:
+                # Long response indicates this was a real question, not an instruction
+                # Remove the corresponding user input and stop collecting initial context
+                if initial_messages and initial_messages[-1]["role"] == "user":
+                    initial_messages.pop()  # Remove the user input
+                break
+        # Skip any other message types (shouldn't happen in normal chat)
+    
+    # Build initial context (first N user inputs + their responses)
+    initial_context = ""
+    if initial_messages:
+        initial_context = "\n\nInitial Instructions:\n"
+        for msg in initial_messages:
+            role = "Human" if msg["role"] == "user" else "Assistant"
+            initial_context += f"{role}: {msg['content']}\n\n"
+    
+    # Build recent context (remaining messages after initial instructions)
+    recent_context = ""
+    remaining_messages = chat_history[len(initial_messages):]
+    recent_messages = []
+    
+    if remaining_messages:
+        # Take last N recent messages from the remaining ones
+        recent_messages = remaining_messages[-max_recent_messages:]
+        
+        recent_context = "\n\nRecent Conversation:\n"
+        for msg in recent_messages:
+            role = "Human" if msg["role"] == "user" else "Assistant"
+            recent_context += f"{role}: {msg['content']}\n\n"
+    
+    total_used = len(initial_messages) + len(recent_messages)
+    
+    return initial_context, recent_context, total_used
+
 def condense_question_with_context(current_query, chat_history, llm_model):
     """
-    Condense the current question with chat history context to create a standalone query
+    Condense the current question with hybrid context to create a standalone query
     """
     if not chat_history:
         return current_query
     
-    # Take last 6 messages (3 exchanges) to avoid token limits
-    recent_history = chat_history[-6:]
+    # Build hybrid context (initial instructions + recent conversation)
+    initial_context, recent_context, total_used = build_hybrid_context(chat_history, max_initial_user_inputs=3, max_recent_messages=6)
     
-    # Format chat history
-    history_text = ""
-    for msg in recent_history:
-        role = "Human" if msg["role"] == "user" else "Assistant"
-        history_text += f"{role}: {msg['content']}\n\n"
+    # Combine contexts
+    full_context = initial_context + recent_context
     
     condense_prompt = f"""Given the following conversation history and a follow-up question, rephrase the follow-up question to be a standalone question that captures the full context and intent.
 
 Conversation History:
-{history_text}
+{full_context}
 
 Follow-up Question: {current_query}
 
 Standalone Question:"""
 
-    logger.info(f"🔄 Condensing query with context from {len(recent_history)} previous messages")
+    logger.info(f"🔄 Condensing query with hybrid context from {total_used} messages (initial + recent)")
     
     # Set up LLM for condensing
     if llm_model in ["llama3-8B", "llama3-70B", "llama3.1-70B", "llama-4-Scout"]:
@@ -1120,7 +1186,7 @@ def save_debug_chunks(search_results, query, container_name):
         return None
 
 def generate_llm_response_with_context(query, search_results, llm_model, system_prompt, chat_history):
-    """Enhanced response generation that includes chat context"""
+    """Enhanced response generation that includes hybrid chat context"""
     
     # Build context from search results
     context = "\n\n".join([
@@ -1128,16 +1194,24 @@ def generate_llm_response_with_context(query, search_results, llm_model, system_
         for doc in search_results
     ])
     
-    # Build chat history context (last 4 messages to avoid token limits)
+    # Build hybrid chat context (initial instructions + recent conversation)
     chat_context = ""
     if chat_history:
-        recent_history = chat_history[-4:]
-        chat_context = "\n\nRecent Conversation:\n"
-        for msg in recent_history:
-            role = "You previously asked" if msg["role"] == "user" else "I previously answered"
-            chat_context += f"{role}: {msg['content'][:200]}...\n"
+        initial_context, recent_context, total_used = build_hybrid_context(chat_history, max_initial_user_inputs=3, max_recent_messages=4)
+        chat_context = initial_context + recent_context
+        
+        # Truncate recent context if needed (but preserve initial context)
+        if len(chat_context) > 2000:  # Rough token limit
+            # Keep initial context intact, truncate recent context
+            initial_lines = initial_context.split('\n')
+            recent_lines = recent_context.split('\n')
+            
+            # Rebuild with truncated recent context
+            chat_context = '\n'.join(initial_lines)
+            truncated_recent = '\n'.join(recent_lines[:len(recent_lines)//2])  # Truncate recent context
+            chat_context += truncated_recent
     
-    # Create enhanced prompt with both document context and chat history
+    # Create enhanced prompt with both document context and hybrid chat history
     full_prompt = f"""{system_prompt}
 
 Context from relevant documents:
@@ -1146,9 +1220,9 @@ Context from relevant documents:
 
 Current Question: {query}
 
-Answer the current question based on the provided document context, and consider the recent conversation context for continuity:"""
+Answer the current question based on the provided document context, and consider the conversation context for continuity:"""
     
-    logger.info(f"🤖 Generating response with {llm_model} (including chat context)")
+    logger.info(f"🤖 Generating response with {llm_model} (including hybrid chat context)")
     
     # Set up LLM based on model type (same as before)
     if llm_model in ["llama3-8B", "llama3-70B", "llama3.1-70B", "llama-4-Scout"]:
@@ -1186,6 +1260,62 @@ Answer the current question based on the provided document context, and consider
     response = llm.complete(full_prompt)
     return response.text
 
+def generate_chat_only_response(query, llm_model, chat_history):
+    """Generate response without document search - chat only mode with hybrid context"""
+    
+    # Build hybrid chat context (initial instructions + recent conversation)
+    chat_context = ""
+    if chat_history:
+        initial_context, recent_context, total_used = build_hybrid_context(chat_history, max_initial_user_inputs=3, max_recent_messages=6)
+        chat_context = initial_context + recent_context
+    
+    # Create chat-only prompt
+    chat_prompt = f"""You are a helpful AI assistant. You are currently in chat-only mode, which means you are not searching any documents. Please respond to the user's question based on your general knowledge and the conversation context.
+
+{chat_context}
+
+Current Question: {query}
+
+Please provide a helpful response. If the user is asking about documents or research, kindly remind them that they are in chat-only mode and suggest they enable document search if they need information from the knowledge base."""
+    
+    logger.info(f"🤖 Generating chat-only response with {llm_model} (hybrid context from {len(chat_history)} messages)")
+    
+    # Set up LLM based on model type
+    if llm_model in ["llama3-8B", "llama3-70B", "llama3.1-70B", "llama-4-Scout"]:
+        if llm_model == "llama3-8B":
+            api_base = os.environ.get("URL_AZURE_LLAMA3_8B")
+            api_key = os.environ.get("KEY_AZURE_LLAMA3_8B")
+        elif llm_model == "llama3-70B":
+            api_base = os.environ.get("URL_AZURE_LLAMA3_70B")
+            api_key = os.environ.get("KEY_AZURE_LLAMA3_70B")
+        elif llm_model == "llama3.1-70B":
+            api_base = os.environ.get("URL_AZURE_LLAMA3_1_70B")
+            api_key = os.environ.get("KEY_AZURE_LLAMA3_1_70B")
+        elif llm_model == "llama-4-Scout":
+            api_base = os.environ.get("URL_AZURE_LLAMA4_SCOUT")
+            api_key = os.environ.get("KEY_AZURE_LLAMA4_SCOUT")
+        
+        llm = OpenAI(
+            api_base=api_base,
+            api_key=api_key,
+            max_tokens=int(os.environ.get("OPENAI_MAX_TOKENS", "4000")),
+            temperature=0.1
+        )
+    
+    elif llm_model in ["gpt-4o-mini", "gpt-4", "gpt-4o", "gpt-3.5-turbo", "o4-mini"]:
+        deployment_name = get_azure_openai_deployment_name(llm_model)
+        llm = AzureOpenAI(
+            engine=deployment_name,
+            azure_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT"),
+            api_key=os.environ.get("AZURE_OPENAI_API_KEY"),
+            api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
+            temperature=0.1 if not is_o_model(llm_model) else 1
+        )
+    
+    # Generate response
+    response = llm.complete(chat_prompt)
+    return response.text
+
 # IMPORTANT: Initialize session state for user isolation
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -1211,7 +1341,7 @@ if "selected_documents" not in st.session_state:
     st.session_state.selected_documents = set()
 if "system_prompt" not in st.session_state:
     st.session_state.system_prompt = """System prompt:
-You are an expert research assistant. You are assisting a formative evaluation of UNICEF East Asia Pacific’s adolescent girls–focused programming for the period of 2022–2025. Your task is to review selected documents in this knowledge base and extract verbatim excerpts or exact text to answer specific questions.
+You are an expert research assistant. You are assisting a formative evaluation of UNICEF East Asia Pacific's adolescent girls–focused programming for the period of 2022–2025. Your task is to review selected documents in this knowledge base and extract verbatim excerpts or exact text to answer specific questions.
 When answering a question:
 1. COMPREHENSIVENESS: Always search across ALL selected documents in the knowledge base and extract information from each of them individually. You must extract responses from each selected document for each question. 
 2. STRUCTURED RESPONSES: Copy exact information from the selected documents to answer the question. Organize answers in excerpts or paragraphs from the text. Provide whole sentences as a standard rule. Where there are no complete sentences, include all relevant information to answer the question in a paragraph. 
@@ -1228,6 +1358,8 @@ Population sub-groups: AG = adolescent girls, AB = adolescent boys, and others s
 UNICEF areas of work: CP = child protection, ALS = alternate learning systems, and others such as OOS, CSE, SP, VAC, VAW, GBV, CEFMU, CM, SBC, MHM, NFE, ECCD, GE, GR…
 Offices, Departments and Other Occupational Units: CO = Country Office, FP = focal point, DoE = Department of Education and others such as RO, DoH, MoH, NAP, RHU, LGU, GAWG, IP…
    """
+if "search_documents_enabled" not in st.session_state:
+    st.session_state.search_documents_enabled = False
 
 if password_input==password_unicef:
     azure_storage_account_name = os.environ["AZURE_STORAGE_ACCOUNT_NAME"]
@@ -1445,6 +1577,18 @@ if password_input==password_unicef:
             with st.chat_message(message["role"]):
                 st.write(message["content"])
 
+
+        # # Search mode toggle - positioned BEFORE chat input
+        # col1, col2 = st.columns([0.5, 0.5])
+        
+        # with col1:
+        #     search_mode = st.toggle(
+        #         "🔍 Search Documents",
+        #         value=st.session_state.search_documents_enabled,
+        #         help="Toggle to search documents or chat without searching"
+        #     )
+        #     st.session_state.search_documents_enabled = search_mode
+
         # Chat input
         # Chat input (replace your existing chat input section with this)
         if prompt := st.chat_input("Your question"):
@@ -1456,162 +1600,177 @@ if password_input==password_unicef:
             with st.chat_message("user"):
                 st.write(prompt)
 
+
+        if prompt:
             # Generate assistant response
             with st.chat_message("assistant"):
                 try:
-                    # Step 1: Condense query with chat history context
-                    with st.spinner("🔄 Analyzing conversation context..."):
-                        condensed_query = condense_question_with_context(
-                            prompt, 
-                            st.session_state.messages[:-1],  # Exclude current message
-                            model_variable
-                        )
+                    # Check if document search is enabled
+                    if st.session_state.search_documents_enabled:
+                        # Step 1: Condense query with chat history context
+                        with st.spinner("🔄 Analyzing conversation context..."):
+                            condensed_query = condense_question_with_context(
+                                prompt, 
+                                st.session_state.messages[:-1],  # Exclude current message
+                                model_variable
+                            )
+                            
+                            # Show condensed query if different from original
+                            if condensed_query != prompt:
+                                with st.expander("🔍 Condensed Query", expanded=False):
+                                    st.write(f"**Original:** {prompt}")
+                                    st.write(f"**Condensed:** {condensed_query}")
                         
-                        # Show condensed query if different from original
-                        if condensed_query != prompt:
-                            with st.expander("🔍 Condensed Query", expanded=False):
-                                st.write(f"**Original:** {prompt}")
-                                st.write(f"**Condensed:** {condensed_query}")
-                    
-                    # Step 2: Choose Processing Strategy
-                    if use_multi_prompt:
-                        # Multi-Prompt Document-Grouped Search and Processing
-                        with st.spinner("🔍 Searching and grouping documents..."):
-                            # Calculate total chunks based on deep research setting
-                            total_chunks = 100 if deep_research else 70
-                            max_chunks_per_group = 20  # Document-grouped strategy limit
-                            
-                            # Debug: Show what we're searching
-                            st.write(f"🔍 **Searching** {len(st.session_state.selected_documents)} documents: {list(st.session_state.selected_documents)}")
-                            st.write(f"📊 **Total chunks to retrieve:** {total_chunks}")
-                            # st.write(f"📊 **Max chunks per group:** {max_chunks_per_group}")
-                            # st.info("🔄 Using Multi-Prompt Strategy: Document-grouped processing to avoid context overload")
-                            
-                            # Use document-grouped search
-                            document_groups = search_document_groups(
-                                container_name, 
-                                condensed_query,  # Use condensed query for search
-                                st.session_state.selected_documents,
-                                total_chunks,
-                                min_chunks_per_doc=5,  # Ensure minimum 5 chunks per document
-                                max_chunks_per_group=max_chunks_per_group,
-                                mmr_enabled=mmr_enabled  # Use UI toggle setting
-                            )
-                            
-                            if not document_groups:
-                                response_text = "No relevant documents found for your query."
-                                st.write(response_text)
-                                st.session_state.messages.append({"role": "assistant", "content": response_text})
-                            else:
-                                # Show document groups info
-                                total_chunks_retrieved = sum(group['chunk_count'] for group in document_groups)
-                                all_docs_included = set()
-                                for group in document_groups:
-                                    docs_included = group.get('documents_included', [group['document_name']])
-                                    all_docs_included.update(docs_included)
-                                st.info(f"🔍 Searched {len(st.session_state.selected_documents)} selected documents • Retrieved {total_chunks_retrieved} chunks from {len(all_docs_included)} documents • Created {len(document_groups)} processing groups")
+                        # Step 2: Choose Processing Strategy
+                        if use_multi_prompt:
+                            # Multi-Prompt Document-Grouped Search and Processing
+                            with st.spinner("🔍 Searching and grouping documents..."):
+                                # Calculate total chunks based on deep research setting
+                                total_chunks = 100 if deep_research else 70
+                                max_chunks_per_group = 20  # Document-grouped strategy limit
                                 
-                                # Save debug information for all chunks
-                                all_chunks = []
-                                for group in document_groups:
-                                    all_chunks.extend(group['chunks'])
-                                debug_file = save_debug_chunks(all_chunks, condensed_query, container_name)
-                                if debug_file:
-                                    st.success(f"🔍 Debug: Chunks saved to {debug_file}")
-                                    logger.info(f"🔍 DEBUG FILE: {debug_file}")
+                                # Debug: Show what we're searching
+                                st.write(f"🔍 **Searching** {len(st.session_state.selected_documents)} documents: {list(st.session_state.selected_documents)}")
+                                st.write(f"📊 **Total chunks to retrieve:** {total_chunks}")
+                                # st.write(f"📊 **Max chunks per group:** {max_chunks_per_group}")
+                                # st.info("🔄 Using Multi-Prompt Strategy: Document-grouped processing to avoid context overload")
                                 
-                                # Step 3: Multi-Prompt Processing with Progress Tracking
-                                progress_container = st.container()
-                                progress_bar = st.progress(0)
-                                status_text = st.empty()
+                                # Use document-grouped search
+                                document_groups = search_document_groups(
+                                    container_name, 
+                                    condensed_query,  # Use condensed query for search
+                                    st.session_state.selected_documents,
+                                    total_chunks,
+                                    min_chunks_per_doc=5,  # Ensure minimum 5 chunks per document
+                                    max_chunks_per_group=max_chunks_per_group,
+                                    mmr_enabled=mmr_enabled  # Use UI toggle setting
+                                )
                                 
-                                def update_progress(current_group, total_groups, doc_name):
-                                    progress = current_group / total_groups
-                                    progress_bar.progress(progress)
-                                    status_text.info(f"🤖 Processing group {current_group}/{total_groups}: {doc_name}")
+                                if not document_groups:
+                                    response_text = "No relevant documents found for your query."
+                                    st.write(response_text)
+                                    st.session_state.messages.append({"role": "assistant", "content": response_text})
+                                else:
+                                    # Show document groups info
+                                    total_chunks_retrieved = sum(group['chunk_count'] for group in document_groups)
+                                    all_docs_included = set()
+                                    for group in document_groups:
+                                        docs_included = group.get('documents_included', [group['document_name']])
+                                        all_docs_included.update(docs_included)
+                                    st.info(f"🔍 Searched {len(st.session_state.selected_documents)} selected documents • Retrieved {total_chunks_retrieved} chunks from {len(all_docs_included)} documents • Created {len(document_groups)} processing groups")
+                                    
+                                    # Save debug information for all chunks
+                                    all_chunks = []
+                                    for group in document_groups:
+                                        all_chunks.extend(group['chunks'])
+                                    debug_file = save_debug_chunks(all_chunks, condensed_query, container_name)
+                                    if debug_file:
+                                        st.success(f"🔍 Debug: Chunks saved to {debug_file}")
+                                        logger.info(f"🔍 DEBUG FILE: {debug_file}")
+                                    
+                                    # Step 3: Multi-Prompt Processing with Progress Tracking
+                                    progress_container = st.container()
+                                    progress_bar = st.progress(0)
+                                    status_text = st.empty()
+                                    
+                                    def update_progress(current_group, total_groups, doc_name):
+                                        progress = current_group / total_groups
+                                        progress_bar.progress(progress)
+                                        status_text.info(f"🤖 Processing group {current_group}/{total_groups}: {doc_name}")
+                                    
+                                    with st.spinner("🤖 Processing document groups with multi-prompt strategy..."):
+                                        response_text, group_results = process_document_groups_sequentially(
+                                            prompt,  # Use original query for response generation
+                                            document_groups,
+                                            model_variable, 
+                                            st.session_state.system_prompt,
+                                            progress_callback=update_progress,
+                                            chat_history=st.session_state.messages[:-1]  # Pass chat history
+                                        )
+                                    
+                                    # Clear progress indicators
+                                    progress_bar.empty()
+                                    status_text.empty()
+                                    
+                                    # Show processing summary
+                                    successful_groups = len([r for r in group_results if 'error' not in r])
+                                    total_chunks_processed = sum(r.get('chunk_count', 0) for r in group_results)
+                                    st.success(f"✅ Multi-prompt processing complete: {successful_groups}/{len(document_groups)} groups processed successfully ({total_chunks_processed} total chunks)")
+                                    
+                                    # Show detailed group results in expandable section
+                                    with st.expander("📊 Detailed Processing Results", expanded=False):
+                                        for result in group_results:
+                                            status = "✅" if 'error' not in result else "❌"
+                                            docs_included = result.get('documents_included', [result['document_name']])
+                                            docs_str = ', '.join(docs_included) if len(docs_included) > 1 else docs_included[0]
+                                            st.write(f"{status} **{result['document_name']}**: {result.get('chunk_count', 0)} chunks from {len(docs_included)} document(s)")
+                                            if len(docs_included) > 1:
+                                                st.caption(f"   Documents: {docs_str}")
+                                            if 'error' in result:
+                                                st.error(f"Error: {result['error']}")
+                                    
+                                    st.write(response_text)
+                                    st.session_state.messages.append({"role": "assistant", "content": response_text})
+                        else:
+                            # Original Single-Prompt Strategy
+                            with st.spinner("🔍 Searching selected documents..."):
+                                # Calculate total chunks based on deep research setting
+                                total_chunks = 100 if deep_research else 70
                                 
-                                with st.spinner("🤖 Processing document groups with multi-prompt strategy..."):
-                                    response_text, group_results = process_document_groups_sequentially(
-                                        prompt,  # Use original query for response generation
-                                        document_groups,
-                                        model_variable, 
-                                        st.session_state.system_prompt,
-                                        progress_callback=update_progress,
-                                        chat_history=st.session_state.messages[:-1]  # Pass chat history
-                                    )
+                                # Debug: Show what we're searching
+                                st.write(f"🔍 **Debug:** Searching {len(st.session_state.selected_documents)} documents: {list(st.session_state.selected_documents)}")
+                                st.write(f"📊 **Total chunks to retrieve:** {total_chunks}")
+                                st.info("📝 Using Single-Prompt Strategy: Traditional RAG processing")
                                 
-                                # Clear progress indicators
-                                progress_bar.empty()
-                                status_text.empty()
+                                # Use multi-document search with selected documents
+                                search_results = search_azure_with_document_filter(
+                                    container_name, 
+                                    condensed_query,  # Use condensed query for search
+                                    st.session_state.selected_documents,
+                                    total_chunks,
+                                    min_chunks_per_doc=5,  # Ensure minimum 5 chunks per document
+                                    mmr_enabled=mmr_enabled,  # Use UI toggle setting
+                                    mmr_lambda=0.5  # Fixed balanced setting
+                                )
                                 
-                                # Show processing summary
-                                successful_groups = len([r for r in group_results if 'error' not in r])
-                                total_chunks_processed = sum(r.get('chunk_count', 0) for r in group_results)
-                                st.success(f"✅ Multi-prompt processing complete: {successful_groups}/{len(document_groups)} groups processed successfully ({total_chunks_processed} total chunks)")
-                                
-                                # Show detailed group results in expandable section
-                                with st.expander("📊 Detailed Processing Results", expanded=False):
-                                    for result in group_results:
-                                        status = "✅" if 'error' not in result else "❌"
-                                        docs_included = result.get('documents_included', [result['document_name']])
-                                        docs_str = ', '.join(docs_included) if len(docs_included) > 1 else docs_included[0]
-                                        st.write(f"{status} **{result['document_name']}**: {result.get('chunk_count', 0)} chunks from {len(docs_included)} document(s)")
-                                        if len(docs_included) > 1:
-                                            st.caption(f"   Documents: {docs_str}")
-                                        if 'error' in result:
-                                            st.error(f"Error: {result['error']}")
-                                
-                                st.write(response_text)
-                                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                                if not search_results:
+                                    response_text = "No relevant documents found for your query."
+                                    st.write(response_text)
+                                    st.session_state.messages.append({"role": "assistant", "content": response_text})
+                                else:
+                                    # Show search results info
+                                    docs_consulted = len(set(result['title'] for result in search_results))
+                                    st.info(f"🔍 Searched {len(st.session_state.selected_documents)} selected documents • Retrieved {len(search_results)} chunks from {docs_consulted} documents")
+                                    
+                                    # Save debug information
+                                    debug_file = save_debug_chunks(search_results, condensed_query, container_name)
+                                    if debug_file:
+                                        st.success(f"🔍 Debug: Chunks saved to {debug_file}")
+                                        logger.info(f"🔍 DEBUG FILE: {debug_file}")
+                                    
+                                    # Step 3: Generate response with both document context and chat history
+                                    with st.spinner("🤖 Generating response..."):
+                                        response_text = generate_llm_response_with_context(
+                                            prompt,  # Use original query for response generation
+                                            search_results, 
+                                            model_variable, 
+                                            st.session_state.system_prompt,
+                                            st.session_state.messages[:-1]  # Pass chat history
+                                        )
+                                    
+                                    st.write(response_text)
+                                    st.session_state.messages.append({"role": "assistant", "content": response_text})
                     else:
-                        # Original Single-Prompt Strategy
-                        with st.spinner("🔍 Searching selected documents..."):
-                            # Calculate total chunks based on deep research setting
-                            total_chunks = 100 if deep_research else 70
-                            
-                            # Debug: Show what we're searching
-                            st.write(f"🔍 **Debug:** Searching {len(st.session_state.selected_documents)} documents: {list(st.session_state.selected_documents)}")
-                            st.write(f"📊 **Total chunks to retrieve:** {total_chunks}")
-                            st.info("📝 Using Single-Prompt Strategy: Traditional RAG processing")
-                            
-                            # Use multi-document search with selected documents
-                            search_results = search_azure_with_document_filter(
-                                container_name, 
-                                condensed_query,  # Use condensed query for search
-                                st.session_state.selected_documents,
-                                total_chunks,
-                                min_chunks_per_doc=5,  # Ensure minimum 5 chunks per document
-                                mmr_enabled=mmr_enabled,  # Use UI toggle setting
-                                mmr_lambda=0.5  # Fixed balanced setting
+                        # Chat-only mode - no document search
+                        with st.spinner("💬 Generating chat response..."):
+                            st.info("💬 **Chat Only Mode** - No documents searched")
+                            response_text = generate_chat_only_response(
+                                prompt,
+                                model_variable,
+                                st.session_state.messages[:-1]  # Pass chat history
                             )
-                            
-                            if not search_results:
-                                response_text = "No relevant documents found for your query."
-                                st.write(response_text)
-                                st.session_state.messages.append({"role": "assistant", "content": response_text})
-                            else:
-                                # Show search results info
-                                docs_consulted = len(set(result['title'] for result in search_results))
-                                st.info(f"🔍 Searched {len(st.session_state.selected_documents)} selected documents • Retrieved {len(search_results)} chunks from {docs_consulted} documents")
-                                
-                                # Save debug information
-                                debug_file = save_debug_chunks(search_results, condensed_query, container_name)
-                                if debug_file:
-                                    st.success(f"🔍 Debug: Chunks saved to {debug_file}")
-                                    logger.info(f"🔍 DEBUG FILE: {debug_file}")
-                                
-                                # Step 3: Generate response with both document context and chat history
-                                with st.spinner("🤖 Generating response..."):
-                                    response_text = generate_llm_response_with_context(
-                                        prompt,  # Use original query for response generation
-                                        search_results, 
-                                        model_variable, 
-                                        st.session_state.system_prompt,
-                                        st.session_state.messages[:-1]  # Pass chat history
-                                    )
-                                
-                                st.write(response_text)
-                                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                            st.write(response_text)
+                            st.session_state.messages.append({"role": "assistant", "content": response_text})
                     
                 except Exception as e:
                     error_msg = f"❌ Error: {str(e)}"
@@ -1619,11 +1778,34 @@ if password_input==password_unicef:
                     logger.error(f"Chat error: {str(e)}")
                     st.session_state.messages.append({"role": "assistant", "content": error_msg})
 
+
     # Clear chat history button
-    if st.session_state.messages:
-        if st.button("🗑️ Clear Chat History"):
-            st.session_state.messages = []
-            st.rerun()
+    # if st.session_state.messages:
+    #     if st.button("🗑️ Clear Chat History"):
+    #         st.session_state.messages = []
+    #         st.rerun()
+    col1, col2 = st.columns([0.75, 0.25])
+    
+    with col1:
+        # Left-align content in col1
+        st.markdown('<div style="text-align: left;">', unsafe_allow_html=True)
+        search_mode = st.toggle(
+            "🔍 Search Documents",
+            value=st.session_state.search_documents_enabled,
+            help="Toggle to search documents or chat without searching"
+        )
+        st.session_state.search_documents_enabled = search_mode
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col2:
+        # Right-align content in col2
+        st.markdown('<div style="display: flex; justify-content: flex-end;">', unsafe_allow_html=True)
+        # Clear chat history button
+        if st.session_state.messages:
+            if st.button("🗑️ Clear Chat History"):
+                st.session_state.messages = []
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 else:
     st.error("Please enter the correct password to access the application.")
